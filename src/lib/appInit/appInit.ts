@@ -146,8 +146,14 @@ export function initApp(): void {
     | ((message: unknown, sender: browser.Runtime.MessageSender) => Promise<unknown> | undefined)
     | null = null;
   let pageHideHandler: (() => void) | null = null;
+  let visibilityChangeHandler: (() => void) | null = null;
 
   if (topFrame) {
+    const closeOpenOverlay = (): void => {
+      if (!isBreadcrumbTrailOpen()) return;
+      hideBreadcrumbTrail();
+    };
+
     const openOverlay = (state: TrailState): void => {
       showBreadcrumbTrail(state, {
         settings,
@@ -208,11 +214,13 @@ export function initApp(): void {
     };
     browser.runtime.onMessage.addListener(messageHandler);
 
-    pageHideHandler = (): void => {
-      if (!isBreadcrumbTrailOpen()) return;
-      hideBreadcrumbTrail();
+    pageHideHandler = closeOpenOverlay;
+    visibilityChangeHandler = (): void => {
+      if (document.visibilityState !== "hidden") return;
+      closeOpenOverlay();
     };
     window.addEventListener("pagehide", pageHideHandler);
+    document.addEventListener("visibilitychange", visibilityChangeHandler);
   }
 
   window.__tabtrailCleanup = (): void => {
@@ -225,6 +233,9 @@ export function initApp(): void {
     browser.storage.onChanged.removeListener(storageChangedHandler);
     if (messageHandler) browser.runtime.onMessage.removeListener(messageHandler);
     if (pageHideHandler) window.removeEventListener("pagehide", pageHideHandler);
+    if (visibilityChangeHandler) {
+      document.removeEventListener("visibilitychange", visibilityChangeHandler);
+    }
     if (isBreadcrumbTrailOpen()) hideBreadcrumbTrail();
     delete window.__tabtrailCleanup;
   };

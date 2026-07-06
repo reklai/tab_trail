@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "TabTrail - Current Tab History",
   "version": "1.0.0",
-  "description": "Press Alt+H to show this tab's page trail and jump back to any visited step without pressing Back over and over.",
+  "description": "Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.",
   "minimum_chrome_version": "89",
   "permissions": [
     "webNavigation",

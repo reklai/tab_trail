@@ -2,7 +2,7 @@
   "name": "tabtrail-extension",
   "version": "1.0.0",
   "private": true,
-  "description": "Press Alt+H to show this tab's page trail and jump back to any visited step without pressing Back over and over.",
+  "description": "Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.",
   "license": "MIT",
   "scripts": {
     "build": "node esBuildConfig/build.mjs",

@@ -74,6 +74,11 @@ test("content script captures both trigger event kinds in capture phase and is r
   assert.match(source, /openTabTrailOptions/);
   assert.match(source, /onOpenOptions:\s*\(\)\s*=>/);
   assert.match(source, /HISTORY_GO/);
+  assert.match(source, /const closeOpenOverlay\s*=\s*\(\):\s*void\s*=>/);
+  assert.match(source, /document\.visibilityState !== "hidden"/);
+  assert.match(source, /document\.addEventListener\("visibilitychange", visibilityChangeHandler\)/);
+  assert.match(source, /document\.removeEventListener\("visibilitychange", visibilityChangeHandler\)/);
+  assert.doesNotMatch(source, /addEventListener\("blur"/);
 });
 
 test("trigger contract accepts left, middle, and right mouse buttons only", () => {

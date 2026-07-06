@@ -8,21 +8,21 @@
 Chrome Web Store listing title: **TabTrail - Current Tab History**
 
 ## Chrome Summary (short, <=132 chars)
-Press Alt+H to show this tab's page trail and jump back to any visited step without pressing Back over and over.
+Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.
 
 ## Firefox Summary (<=250 chars)
-Press Alt+H to show this tab's page trail, preview visited pages, and jump back to the right step without pressing Back over and over.
+Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.
 
 ## Description
 TabTrail shows a clean page trail for the current tab, so you can see where you
-came from and jump back to the right step without repeatedly pressing Back.
+came from and jump back to the right page without repeatedly pressing Back.
 
 Use it when you are deep in docs, search results, product pages, dashboards,
 GitHub issues, or research links and need to recover your place quickly.
 
 - View the page trail for the current tab.
 - Open the trail with a keyboard or mouse shortcut.
-- Preview visited pages from the trail.
+- Preview earlier pages from the trail.
 - Jump back to any trail entry.
 - Open entries in a new tab or window.
 - Copy any trail URL.
