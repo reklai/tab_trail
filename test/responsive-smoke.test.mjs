@@ -20,8 +20,9 @@ test("branch overlay includes mobile tightening and scroll containment", () => {
   assert.match(css, /\.wf-grip\s*\{[\s\S]*rgba\(254,188,46/);
   assert.match(css, /\.wf-close\s*\{[\s\S]*rgba\(255,95,87/);
   assert.match(css, /\.wf-branch-row\s*\{[\s\S]*color:\s*#d6d6d6/);
-  assert.match(css, /\.wf-branch-row\s*\{[\s\S]*grid-template-columns:\s*14px minmax\(0,\s*1fr\)/);
+  assert.match(css, /\.wf-branch-row\s*\{[\s\S]*grid-template-columns:\s*14px minmax\(0,\s*1fr\) auto/);
   assert.match(css, /\.wf-branch-row\s*\{[\s\S]*margin:\s*2px 0/);
+  assert.match(css, /\.wf-row-more\s*\{[\s\S]*width:\s*28px[\s\S]*height:\s*28px/);
   assert.match(css, /\.wf-branch-row-current\s*\{[\s\S]*rgba\(10,132,255/);
   assert.match(css, /\.wf-branch-row-current \.wf-branch-node\s*\{[\s\S]*#30d158/);
   assert.match(css, /\.wf-branch-row-previewed\s*\{[\s\S]*#ffb340/);
@@ -39,8 +40,12 @@ test("branch overlay includes mobile tightening and scroll containment", () => {
   assert.match(css, /\.wf-preview-pane-dragging\s*\{/);
   assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*\.wf-preview-pane\s*\{[\s\S]*width:\s*calc\(100vw - 24px\)/);
   assert.match(css, /\.wf-menu\s*\{[\s\S]*z-index:\s*14/);
+  assert.doesNotMatch(css, /\.wf-menu-section-label/);
+  assert.match(css, /\.wf-menu-detail\s*\{[\s\S]*background:\s*var\(--ht-color-surface-dim\)/);
+  assert.match(css, /\.wf-menu-detail\s*\{[\s\S]*border:\s*1px solid var\(--ht-color-border-soft\)/);
+  assert.match(css, /\.wf-menu-detail-url\s*\{[\s\S]*word-break:\s*break-all/);
   assert.doesNotMatch(css, /--wf-depth/);
-  assert.match(css, /\.wf-tooltip-title/);
+  assert.doesNotMatch(css, /\.wf-tooltip/);
 });
 
 test("popup layout is fixed-height, scroll-safe, and never uses 100vh", () => {

@@ -1,10 +1,10 @@
 // Compact vertical branch overlay showing the tab's navigation trail. Built
 // on the shared Shadow DOM panel host so it stays isolated from page styles,
 // but deliberately NON-modal: the host is click-through outside the bar, and
-// nothing inside the bar is focusable, so the page keeps keyboard focus and
-// the host's focus-reclaim machinery never engages. Rows are clicked to
-// jump, right-clicked for a small in-shadow menu, and the bar is dragged by
-// its handle to reposition (position persisted via a callback).
+// the page keeps keyboard focus outside explicit controls. Rows are clicked to
+// jump, opened through the right-side details button or right-clicked for a
+// small in-shadow menu, and the bar is dragged by its handle to reposition
+// (position persisted via a callback).
 
 import styles from "./breadcrumbTrail.css";
 import {
@@ -13,7 +13,7 @@ import {
   getBaseStyles,
   registerPanelCleanup,
 } from "../../../common/utils/panelHost";
-import { escapeHtml, extractDomain } from "../../../common/utils/helpers";
+import { extractDomain } from "../../../common/utils/helpers";
 import { formatTrailTimestamp } from "../../../core/trail/trailCore";
 
 export interface BreadcrumbTrailCallbacks {
@@ -31,7 +31,6 @@ export interface BreadcrumbTrailOptions {
 }
 
 const DEFAULT_POSITION: TabTrailOverlayPosition = { xPercent: 50, yPercent: 8 };
-const HOVER_DETAIL_DELAY_MS = 350;
 const PREVIEW_VIEWPORT_MARGIN = 12;
 const PREVIEW_GAP = 12;
 const PREVIEW_SIDE_MIN_WIDTH = 460;
@@ -108,7 +107,6 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
   registerPanelCleanup(() => {
     document.removeEventListener("keydown", onDocumentKeydown, true);
     closeEntryMenu();
-    hideTooltip();
     closeEntryPreview();
     const closing = session;
     session = null;
@@ -192,7 +190,6 @@ function renderBar(): void {
   const { bar, state, options } = session;
   const { settings, callbacks } = options;
   closeEntryMenu();
-  hideTooltip();
   closeEntryPreview();
   bar.textContent = "";
 
@@ -234,7 +231,7 @@ function buildBranchHeader(callbacks: BreadcrumbTrailCallbacks): HTMLDivElement 
   header.appendChild(buildSettingsButton(callbacks));
   const title = document.createElement("span");
   title.className = "wf-branch-title";
-  title.textContent = "Branch";
+  title.textContent = "Page Trail";
   header.appendChild(title);
   header.appendChild(buildGrip());
   header.appendChild(buildCloseButton());
@@ -331,13 +328,12 @@ function buildBranchRow(
   content.appendChild(url);
 
   row.appendChild(content);
+  row.appendChild(buildRowMoreButton(row, index, entry, callbacks));
 
   row.addEventListener("click", (event) => {
     event.preventDefault();
     if (index !== state.cursor) callbacks.onJump(index);
   });
-  row.addEventListener("mouseenter", () => scheduleTooltip(row, entry));
-  row.addEventListener("mouseleave", hideTooltip);
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -346,55 +342,24 @@ function buildBranchRow(
   return row;
 }
 
-// --- Tooltip ---
-
-let tooltipElement: HTMLDivElement | null = null;
-let tooltipDelayHandle: number | null = null;
-
-function clearTooltipDelay(): void {
-  if (tooltipDelayHandle == null) return;
-  window.clearTimeout(tooltipDelayHandle);
-  tooltipDelayHandle = null;
-}
-
-function rowNeedsTooltip(anchor: HTMLElement): boolean {
-  const title = anchor.querySelector<HTMLElement>(".wf-branch-entry-title");
-  const url = anchor.querySelector<HTMLElement>(".wf-branch-entry-url");
-  return Boolean(
-    (title && title.scrollHeight > title.clientHeight + 1) ||
-      (url && url.scrollWidth > url.clientWidth + 1),
-  );
-}
-
-function scheduleTooltip(anchor: HTMLElement, entry: TrailEntry): void {
-  hideTooltip();
-  tooltipDelayHandle = window.setTimeout(() => {
-    tooltipDelayHandle = null;
-    if (!anchor.matches(":hover") || !rowNeedsTooltip(anchor)) return;
-    showTooltip(anchor, entry);
-  }, HOVER_DETAIL_DELAY_MS);
-}
-
-function showTooltip(anchor: HTMLElement, entry: TrailEntry): void {
-  if (!session) return;
-  hideTooltip();
-  const title = entryTitle(entry);
-  const tooltip = document.createElement("div");
-  tooltip.className = "wf-tooltip";
-  tooltip.innerHTML = `
-    <div class="wf-tooltip-title">${escapeHtml(title)}</div>
-    <div class="wf-tooltip-url">${escapeHtml(entry.url)}</div>
-    <div class="wf-tooltip-time">${escapeHtml(formatTrailTimestamp(entry.timestamp, Date.now()))}</div>
-  `;
-  session.layer.appendChild(tooltip);
-  positionPopover(tooltip, anchor);
-  tooltipElement = tooltip;
-}
-
-function hideTooltip(): void {
-  clearTooltipDelay();
-  tooltipElement?.remove();
-  tooltipElement = null;
+function buildRowMoreButton(
+  anchor: HTMLElement,
+  index: number,
+  entry: TrailEntry,
+  callbacks: BreadcrumbTrailCallbacks,
+): HTMLButtonElement {
+  const more = document.createElement("button");
+  more.className = "wf-row-more";
+  more.type = "button";
+  more.textContent = "⋯";
+  more.title = "More";
+  more.setAttribute("aria-label", "More details and actions");
+  more.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleEntryMenu(anchor, more, index, entry, callbacks);
+  });
+  return more;
 }
 
 // --- In-page preview ---
@@ -429,7 +394,6 @@ function openEntryPreview(
 ): void {
   if (!session) return;
   closeEntryPreview();
-  hideTooltip();
   anchor.classList.add("wf-branch-row-previewed");
   previewedRowElement = anchor;
 
@@ -630,10 +594,14 @@ function startPreviewPaneDrag(event: PointerEvent): void {
 
 let menuElement: HTMLDivElement | null = null;
 let menuDismissCleanup: (() => void) | null = null;
+let menuAnchorElement: HTMLElement | null = null;
+let menuTriggerElement: HTMLElement | null = null;
 
 function closeEntryMenu(): void {
   menuElement?.remove();
   menuElement = null;
+  menuAnchorElement = null;
+  menuTriggerElement = null;
   if (menuDismissCleanup) {
     menuDismissCleanup();
     menuDismissCleanup = null;
@@ -659,18 +627,55 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
+function toggleEntryMenu(
+  anchor: HTMLElement,
+  trigger: HTMLElement,
+  index: number,
+  entry: TrailEntry,
+  callbacks: BreadcrumbTrailCallbacks,
+): void {
+  if (menuElement && menuAnchorElement === anchor && menuTriggerElement === trigger) {
+    closeEntryMenu();
+    return;
+  }
+  openEntryMenu(anchor, index, entry, callbacks, trigger);
+}
+
 function openEntryMenu(
   anchor: HTMLElement,
   index: number,
   entry: TrailEntry,
   callbacks: BreadcrumbTrailCallbacks,
+  trigger?: HTMLElement,
 ): void {
   if (!session) return;
   closeEntryMenu();
-  hideTooltip();
 
   const menu = document.createElement("div");
   menu.className = "wf-menu";
+
+  const detail = document.createElement("div");
+  detail.className = "wf-menu-detail";
+
+  const title = document.createElement("div");
+  title.className = "wf-menu-detail-title";
+  title.textContent = entryTitle(entry);
+  detail.appendChild(title);
+
+  const url = document.createElement("div");
+  url.className = "wf-menu-detail-url";
+  url.textContent = entry.url;
+  detail.appendChild(url);
+
+  const time = document.createElement("div");
+  time.className = "wf-menu-detail-time";
+  time.textContent = `Visited ${formatTrailTimestamp(entry.timestamp, Date.now())}`;
+  detail.appendChild(time);
+
+  menu.appendChild(detail);
+
+  const actions = document.createElement("div");
+  actions.className = "wf-menu-actions";
   const items: Array<{ label: string; action: () => void }> = [
     { label: "Preview", action: () => openEntryPreview(anchor, index, entry, callbacks) },
     { label: "Open in new tab", action: () => callbacks.onOpenInNewTab(index) },
@@ -686,14 +691,19 @@ function openEntryMenu(
       closeEntryMenu();
       item.action();
     });
-    menu.appendChild(row);
+    actions.appendChild(row);
   }
+  menu.appendChild(actions);
   session.layer.appendChild(menu);
   positionPopover(menu, anchor);
   menuElement = menu;
+  menuAnchorElement = anchor;
+  menuTriggerElement = trigger ?? null;
 
   const onOutsidePointer = (event: Event): void => {
-    if (menuElement && event.composedPath().includes(menuElement)) return;
+    const path = event.composedPath();
+    if (menuElement && path.includes(menuElement)) return;
+    if (menuTriggerElement && path.includes(menuTriggerElement)) return;
     closeEntryMenu();
   };
   document.addEventListener("pointerdown", onOutsidePointer, true);

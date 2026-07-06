@@ -170,7 +170,6 @@ test("branch overlay context menu order and callbacks match the trail actions", 
   const source = readSource("src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.ts");
   assert.match(source, /onOpenOptions\(\):\s*void/);
   assert.match(source, /onOpenInNewWindow\(index:\s*number\):\s*void/);
-  assert.match(source, /const HOVER_DETAIL_DELAY_MS\s*=\s*350/);
   assert.match(source, /branchList\.className\s*=\s*"wf-branch-list"/);
   assert.match(
     source,
@@ -186,6 +185,20 @@ test("branch overlay context menu order and callbacks match the trail actions", 
   assert.match(source, /grip\.addEventListener\("pointerdown",\s*startDrag\)/);
   assert.match(source, /className\s*=\s*"wf-branch-row"/);
   assert.match(source, /className\s*=\s*"wf-branch-connector"/);
+  assert.match(source, /function buildRowMoreButton/);
+  assert.match(source, /more\.className\s*=\s*"wf-row-more"/);
+  assert.match(source, /more\.textContent\s*=\s*"⋯"/);
+  assert.match(source, /aria-label",\s*"More details and actions"/);
+  assert.match(source, /toggleEntryMenu\(anchor,\s*more,\s*index,\s*entry,\s*callbacks\)/);
+  assert.match(source, /let menuAnchorElement:\s*HTMLElement \| null = null/);
+  assert.match(source, /let menuTriggerElement:\s*HTMLElement \| null = null/);
+  assert.match(
+    source,
+    /if \(menuElement && menuAnchorElement === anchor && menuTriggerElement === trigger\)/,
+  );
+  assert.match(source, /menuAnchorElement = anchor/);
+  assert.match(source, /menuTriggerElement = trigger \?\? null/);
+  assert.match(source, /path\.includes\(menuTriggerElement\)/);
   assert.match(source, /const budget\s*=\s*Math\.min\(Math\.max\(1,\s*maxVisible\),\s*total\)/);
   assert.match(source, /addIndex\(total - 1\)/);
   assert.match(source, /selected\.size < budget/);
@@ -195,8 +208,7 @@ test("branch overlay context menu order and callbacks match the trail actions", 
   assert.match(source, /className\s*=\s*"wf-branch-entry-title"/);
   assert.match(source, /className\s*=\s*"wf-branch-entry-url"/);
   assert.match(source, /function entryUrlSubtitle/);
-  assert.match(source, /function scheduleTooltip/);
-  assert.match(source, /rowNeedsTooltip\(anchor\)/);
+  assert.doesNotMatch(source, /function scheduleTooltip|rowNeedsTooltip|mouseenter|mouseleave|wf-tooltip/);
   assert.match(source, /function openEntryPreview/);
   assert.match(source, /function positionPreviewPane/);
   assert.match(source, /session\.bar\.getBoundingClientRect\(\)/);
@@ -215,6 +227,13 @@ test("branch overlay context menu order and callbacks match the trail actions", 
   assert.match(source, /frame\.src\s*=\s*entry\.url/);
   assert.match(source, /callbacks\.onOpenInNewTab\(index\)/);
   assert.match(source, /classList\.add\("wf-preview-pane-bottom"\)/);
+  assert.match(source, /className\s*=\s*"wf-menu-detail"/);
+  assert.match(source, /className\s*=\s*"wf-menu-detail-title"/);
+  assert.match(source, /className\s*=\s*"wf-menu-detail-url"/);
+  assert.match(source, /className\s*=\s*"wf-menu-detail-time"/);
+  assert.doesNotMatch(source, /buildMenuSectionLabel|wf-menu-section-label/);
+  assert.match(source, /Visited \$\{formatTrailTimestamp\(entry\.timestamp,\s*Date\.now\(\)\)\}/);
+  assert.match(source, /formatTrailTimestamp\(entry\.timestamp,\s*Date\.now\(\)\)/);
   assert.match(
     source,
     /label:\s*"Preview"[\s\S]*label:\s*"Open in new tab"[\s\S]*label:\s*"Open in new window"[\s\S]*label:\s*"Copy URL"/,
