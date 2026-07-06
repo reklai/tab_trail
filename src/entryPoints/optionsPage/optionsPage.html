@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>__EXTENSION_NAME__ — Settings</title>
+  <link rel="stylesheet" href="optionsPage.css" />
+</head>
+<body>
+  <div class="options">
+    <header class="options-header">
+      <img src="../icons/icon-96.png" width="36" height="36" alt="" />
+      <h1>__EXTENSION_NAME__</h1>
+      <button id="refreshBtn" class="btn" type="button">Refresh</button>
+      <button id="closeBtn" class="btn" type="button">Close</button>
+    </header>
+
+    <main class="options-body">
+      <div class="shortcut-panel" aria-label="Current shortcut">
+        <strong id="shortcutLabel">Press Alt + H to show your trail</strong>
+      </div>
+
+      <section class="card">
+        <h2>Shortcut</h2>
+        <div class="setting-grid">
+          <label class="setting">
+            <div class="setting-label"><strong>Hold key</strong><small>Hold this key with your shortcut</small></div>
+            <select id="triggerModifier"></select>
+          </label>
+          <label class="setting">
+            <div class="setting-label"><strong>Require Shift</strong><small>Add Shift for a safer shortcut</small></div>
+            <input id="triggerWithShift" type="checkbox" />
+          </label>
+          <div class="setting setting-wide">
+            <div class="setting-label"><strong>Key or click</strong><small>Choose a letter, top-row digit, or left/middle/right click</small></div>
+            <button id="triggerCaptureBtn" class="key-capture" type="button">H</button>
+          </div>
+        </div>
+        <div class="card-actions">
+          <button id="resetShortcutBtn" class="btn" type="button">Reset shortcut</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Overlay</h2>
+        <div class="setting-grid">
+          <label class="setting">
+            <div class="setting-label"><strong>Visible rows</strong><small>Longer trails collapse into a "+N more" pill</small></div>
+            <input id="maxVisibleSegments" type="number" min="5" max="12" step="1" />
+          </label>
+          <div class="setting setting-wide">
+            <div class="setting-label"><strong>Overlay position</strong><small>Drag the bar by its handle to move it; reset returns it to the top center</small></div>
+            <button id="resetPositionBtn" class="btn" type="button">Reset position</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Good to know</h2>
+        <ul class="limitations">
+          <li>On browser pages (<code>about:</code>, <code>chrome://</code>, add-on stores) the shortcut can't run; use the toolbar popup to adjust the shortcut or open settings.</li>
+          <li>Trails are session-only by design: they live in session storage, never touch the network, and clear when the browser closes.</li>
+          <li>Each tab keeps its most recent 100 pages; jumping back and branching off drops the abandoned forward entries, just like browser history.</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+  <script src="optionsPage.js"></script>
+</body>
+</html>

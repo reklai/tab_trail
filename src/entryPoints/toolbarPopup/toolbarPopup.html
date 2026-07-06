@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="toolbarPopup.css" />
+</head>
+<body>
+  <div class="tabwheel-popup">
+    <div class="titlebar">
+      <div class="traffic-lights">
+        <button class="dot dot-close" id="closePopupBtn" type="button" title="Close" aria-label="Close popup"></button>
+      </div>
+      <span class="titlebar-text" id="titlebarText">__EXTENSION_NAME__</span>
+      <button class="titlebar-button" id="refreshWayfindBtn" type="button" title="Refresh Wayfind">Refresh</button>
+    </div>
+
+    <div class="shortcut-panel">
+      <strong id="shortcutLabel">Press Alt + H to show your trail</strong>
+      <span id="shortcutStatus">Change the in-page shortcut below.</span>
+    </div>
+
+    <section class="fallback-panel" id="fallbackPanel" aria-live="polite" hidden>
+      <strong id="fallbackTitle">Browser-Restricted Page</strong>
+      <span id="fallbackMessage">The browser does not allow extension scripts on restricted pages. Wayfind cannot listen for keyboard or mouse shortcuts or show the in-page trail here. Use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.</span>
+    </section>
+
+    <main class="popup-scroll">
+      <section class="cycle-mode-panel" aria-label="Wayfind shortcut">
+        <div class="mode-heading">
+          <span>Wayfind Shortcut</span>
+          <strong id="triggerSummary">Alt + H</strong>
+        </div>
+      </section>
+
+      <section class="control-grid" aria-label="Shortcut controls">
+        <label class="control-row" title="Base key held together with the shortcut.">
+          <span><strong>Hold key</strong><small>Hold this key with your shortcut</small></span>
+          <select id="triggerModifier"></select>
+        </label>
+        <label class="control-row" title="Also require Shift before the shortcut works.">
+          <span><strong>Require Shift</strong><small>Add Shift for a safer shortcut</small></span>
+          <input id="triggerWithShift" type="checkbox" />
+        </label>
+        <div class="control-row" title="Choose a letter, top-row digit, or left/middle/right click.">
+          <span><strong>Key or click</strong><small>Letter, digit, or click</small></span>
+          <button id="triggerCaptureBtn" class="key-capture" type="button">H</button>
+        </div>
+      </section>
+
+      <div class="section-actions">
+        <button id="resetShortcutBtn" class="overlay-action" type="button">Reset shortcut</button>
+      </div>
+
+      <section class="cycle-mode-panel" aria-label="Wayfind overlay">
+        <div class="mode-heading">
+          <span>Overlay</span>
+          <strong id="overlaySummary">8 visible rows</strong>
+        </div>
+      </section>
+
+      <section class="control-grid" aria-label="Overlay controls">
+        <label class="control-row" title="Choose how many trail rows stay visible before longer trails collapse.">
+          <span><strong>Visible rows</strong><small>Longer trails collapse into a +N more row</small></span>
+          <input id="maxVisibleSegments" class="number-control" type="number" min="5" max="12" step="1" />
+        </label>
+        <div class="control-row" title="Return the draggable trail overlay to its default location.">
+          <span><strong>Overlay position</strong><small>Return the trail overlay to top center</small></span>
+          <button id="resetPositionBtn" class="overlay-action" type="button">Reset position</button>
+        </div>
+      </section>
+    </main>
+
+    <div class="action-row">
+      <button id="settingsBtn" type="button">Settings</button>
+    </div>
+
+    <div class="popup-toast" id="popupToast" role="status" aria-live="polite" aria-atomic="true"></div>
+  </div>
+  <script src="toolbarPopup.js"></script>
+</body>
+</html>

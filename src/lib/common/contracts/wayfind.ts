@@ -1,0 +1,162 @@
+// Shared Wayfind contract: storage keys, setting defaults, and normalizers.
+// Every surface (background, content script, popup, options) passes stored
+// values through the normalizers here, so data stays valid even when written
+// by an older version or changed outside the extension.
+
+import browser from "webextension-polyfill";
+
+export const WAYFIND_STORAGE_KEYS = {
+  settings: "wayfindSettings",
+} as const;
+
+// Per-tab trail mirrors live under this prefix in session storage (or in
+// local storage on browsers without storage.session, wiped at startup).
+export const TRAIL_MIRROR_KEY_PREFIX = "wayfindTrail:";
+
+export function trailMirrorKey(tabId: number): string {
+  return `${TRAIL_MIRROR_KEY_PREFIX}${tabId}`;
+}
+
+export const WAYFIND_MODIFIER_KEYS: readonly WayfindModifierKey[] = [
+  "alt",
+  "ctrl",
+  "super",
+] as const;
+
+// event.code values we accept for a keyboard trigger: a letter or a top-row digit.
+const TRIGGER_KEY_CODE_PATTERN = /^(?:Key[A-Z]|Digit[0-9])$/;
+
+// event.button values we accept for a mouse trigger.
+export const TRIGGER_MOUSE_BUTTONS: readonly number[] = [0, 1, 2] as const;
+
+export const MIN_VISIBLE_SEGMENTS = 5;
+export const MAX_VISIBLE_SEGMENTS = 12;
+
+export const DEFAULT_WAYFIND_TRIGGER: WayfindTrigger = {
+  modifier: "alt",
+  withShift: false,
+  kind: "key",
+  keyCode: "KeyH",
+  mouseButton: 1,
+};
+
+export const DEFAULT_WAYFIND_SETTINGS: WayfindSettings = {
+  trigger: DEFAULT_WAYFIND_TRIGGER,
+  showTransitionArrows: true,
+  overlayPosition: null,
+  maxVisibleSegments: 8,
+};
+
+function normalizeModifierKey(value: unknown, fallback: WayfindModifierKey): WayfindModifierKey {
+  return WAYFIND_MODIFIER_KEYS.includes(value as WayfindModifierKey)
+    ? (value as WayfindModifierKey)
+    : fallback;
+}
+
+export function isValidTriggerKeyCode(value: unknown): value is string {
+  return typeof value === "string" && TRIGGER_KEY_CODE_PATTERN.test(value);
+}
+
+export function isValidTriggerMouseButton(value: unknown): value is number {
+  return typeof value === "number" && TRIGGER_MOUSE_BUTTONS.includes(value);
+}
+
+function normalizeFlag(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+export function normalizeWayfindTrigger(value: unknown): WayfindTrigger {
+  if (typeof value !== "object" || value === null) {
+    return { ...DEFAULT_WAYFIND_TRIGGER };
+  }
+  const trigger = value as Partial<WayfindTrigger>;
+  const keyCode = isValidTriggerKeyCode(trigger.keyCode)
+    ? trigger.keyCode
+    : DEFAULT_WAYFIND_TRIGGER.keyCode;
+  const mouseButton = isValidTriggerMouseButton(trigger.mouseButton)
+    ? trigger.mouseButton
+    : DEFAULT_WAYFIND_TRIGGER.mouseButton;
+  return {
+    modifier: normalizeModifierKey(trigger.modifier, DEFAULT_WAYFIND_TRIGGER.modifier),
+    withShift: normalizeFlag(trigger.withShift, DEFAULT_WAYFIND_TRIGGER.withShift),
+    kind: trigger.kind === "mouse" ? "mouse" : "key",
+    keyCode,
+    mouseButton,
+  };
+}
+
+function normalizeOverlayPosition(value: unknown): WayfindOverlayPosition | null {
+  if (typeof value !== "object" || value === null) return null;
+  const position = value as Partial<WayfindOverlayPosition>;
+  const x = Number(position.xPercent);
+  const y = Number(position.yPercent);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return {
+    xPercent: Math.min(Math.max(x, 0), 100),
+    yPercent: Math.min(Math.max(y, 0), 100),
+  };
+}
+
+function normalizeMaxVisibleSegments(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric)) return DEFAULT_WAYFIND_SETTINGS.maxVisibleSegments;
+  return Math.min(Math.max(numeric, MIN_VISIBLE_SEGMENTS), MAX_VISIBLE_SEGMENTS);
+}
+
+export function normalizeWayfindSettings(value: unknown): WayfindSettings {
+  if (typeof value !== "object" || value === null) {
+    return { ...DEFAULT_WAYFIND_SETTINGS, trigger: { ...DEFAULT_WAYFIND_TRIGGER } };
+  }
+  const settings = value as Partial<WayfindSettings>;
+  return {
+    trigger: normalizeWayfindTrigger(settings.trigger),
+    showTransitionArrows: true,
+    overlayPosition: normalizeOverlayPosition(settings.overlayPosition),
+    maxVisibleSegments: normalizeMaxVisibleSegments(settings.maxVisibleSegments),
+  };
+}
+
+export function formatWayfindModifierKey(modifier: WayfindModifierKey): string {
+  if (modifier === "ctrl") return "Ctrl / Control";
+  if (modifier === "super") return "Super / Command";
+  return "Alt / Option";
+}
+
+export function formatTriggerKeyLabel(keyCode: string): string {
+  if (keyCode.startsWith("Key")) return keyCode.slice(3);
+  if (keyCode.startsWith("Digit")) return keyCode.slice(5);
+  return keyCode;
+}
+
+export function formatTriggerMouseLabel(button: number): string {
+  if (button === 0) return "Left Click";
+  if (button === 1) return "Middle Click";
+  if (button === 2) return "Right Click";
+  return `Mouse Button ${button}`;
+}
+
+export function formatWayfindTriggerCombo(trigger: WayfindTrigger): string {
+  const parts = [formatWayfindModifierKey(trigger.modifier).split(" / ")[0]];
+  if (trigger.withShift) parts.push("Shift");
+  parts.push(
+    trigger.kind === "mouse"
+      ? formatTriggerMouseLabel(trigger.mouseButton)
+      : formatTriggerKeyLabel(trigger.keyCode),
+  );
+  return parts.join(" + ");
+}
+
+export async function loadWayfindSettings(): Promise<WayfindSettings> {
+  try {
+    const data = await browser.storage.local.get(WAYFIND_STORAGE_KEYS.settings);
+    return normalizeWayfindSettings(data[WAYFIND_STORAGE_KEYS.settings]);
+  } catch (_) {
+    return { ...DEFAULT_WAYFIND_SETTINGS, trigger: { ...DEFAULT_WAYFIND_TRIGGER } };
+  }
+}
+
+export async function saveWayfindSettings(settings: WayfindSettings): Promise<void> {
+  await browser.storage.local.set({
+    [WAYFIND_STORAGE_KEYS.settings]: normalizeWayfindSettings(settings),
+  });
+}

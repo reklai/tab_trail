@@ -1,0 +1,50 @@
+{
+  "manifest_version": 2,
+  "name": "Wayfind",
+  "version": "1.0.0",
+  "description": "Press Alt+H to see where this tab came from. Retrace your browsing path and click any breadcrumb to jump back instantly.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "@wayfind.reklai",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "permissions": [
+    "webNavigation",
+    "tabs",
+    "storage",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["contentScript.js"],
+      "all_frames": true,
+      "match_about_blank": true,
+      "run_at": "document_start"
+    }
+  ],
+  "options_ui": {
+    "page": "optionsPage/optionsPage.html",
+    "open_in_tab": true
+  },
+  "browser_action": {
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    },
+    "default_popup": "toolbarPopup/toolbarPopup.html",
+    "default_title": "Wayfind"
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  }
+}
