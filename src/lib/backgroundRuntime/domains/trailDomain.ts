@@ -15,7 +15,7 @@ import {
   normalizeTrailState,
   resolveJumpPlan,
 } from "../../core/trail/trailCore";
-import { createInFlightMemo, createKeyedTaskQueue } from "../../common/utils/asyncFlow";
+import { createInFlightMemo, createKeyedTaskQueue, sleep } from "../../common/utils/asyncFlow";
 import { isKnownBrowserStoreRestrictedUrl } from "../../common/utils/restrictedUrls";
 
 // --- Surfaces not fully covered by the polyfill types ---
@@ -39,6 +39,12 @@ interface NavigationDetails {
   transitionQualifiers?: string[];
 }
 
+type ContentScriptInjectionOutcome =
+  | "injected-all-frames"
+  | "injected-top-frame"
+  | "skipped"
+  | "failed";
+
 export interface TrailDomain {
   ensureLoaded(): Promise<void>;
   toggleOverlay(senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
@@ -50,6 +56,12 @@ export interface TrailDomain {
   activateExistingContentScripts(): Promise<void>;
   registerLifecycleListeners(): void;
 }
+
+// On install/update we inject into already-open tabs (the manifest only
+// auto-injects on navigation). A tab that's momentarily inaccessible then —
+// mid-navigation, "cannot access contents", closing — fails; retry those over
+// this backoff so a transient miss doesn't leave the tab without the shortcut.
+const CONTENT_SCRIPT_RETRY_DELAYS_MS = [400, 1200];
 
 function normalizePageUrl(url: string | undefined): string | null {
   if (!url) return null;
@@ -243,15 +255,46 @@ export function createTrailDomain(): TrailDomain {
     return false;
   }
 
-  async function injectContentScriptIntoTab(tab: Tabs.Tab): Promise<"injected" | "skipped" | "failed"> {
+  async function injectContentScriptIntoTab(tab: Tabs.Tab): Promise<ContentScriptInjectionOutcome> {
     if (tab.id == null || tab.discarded === true || isPageGestureRestrictedUrl(tab.url)) return "skipped";
-    if (await executeContentScriptInTab(tab.id, true)) return "injected";
-    return await executeContentScriptInTab(tab.id, false) ? "injected" : "failed";
+    if (await executeContentScriptInTab(tab.id, true)) return "injected-all-frames";
+    return await executeContentScriptInTab(tab.id, false) ? "injected-top-frame" : "failed";
+  }
+
+  function shouldRetryContentScriptInjection(outcome: ContentScriptInjectionOutcome): boolean {
+    return outcome === "failed" || outcome === "injected-top-frame";
+  }
+
+  function didInjectContentScript(outcome: ContentScriptInjectionOutcome): boolean {
+    return outcome === "injected-all-frames" || outcome === "injected-top-frame";
   }
 
   async function activateExistingContentScripts(): Promise<void> {
-    const tabs = await browser.tabs.query({}).catch(() => []);
-    await Promise.all(tabs.map((tab) => injectContentScriptIntoTab(tab)));
+    const tabs = await browser.tabs.query({}).catch(() => [] as Tabs.Tab[]);
+    const outcomes = await Promise.all(
+      tabs.map(async (tab) => ({ tab, outcome: await injectContentScriptIntoTab(tab) })),
+    );
+    // "injected-top-frame" is usable as a fallback, but subframes may still
+    // need a retry so the shortcut works when focus is inside them.
+    let pending = outcomes
+      .filter((entry) => shouldRetryContentScriptInjection(entry.outcome))
+      .map((entry) => entry.tab);
+
+    for (const delay of CONTENT_SCRIPT_RETRY_DELAYS_MS) {
+      if (pending.length === 0) break;
+      await sleep(delay);
+      const retried = await Promise.all(
+        pending.map(async (tab) => {
+          // Re-fetch first: the tab may have navigated (the manifest already
+          // injected it — a re-inject is a no-op via __tabtrailCleanup) or closed.
+          const fresh = tab.id != null ? await browser.tabs.get(tab.id).catch(() => null) : null;
+          if (!fresh) return "skipped" as const;
+          return injectContentScriptIntoTab(fresh);
+        }),
+      );
+      pending = pending.filter((_, index) =>
+        shouldRetryContentScriptInjection(retried[index]));
+    }
   }
 
   // --- Domain methods ---
@@ -272,7 +315,7 @@ export function createTrailDomain(): TrailDomain {
     let delivered = await pushTrailToTab(tabId, "TRAIL_SHOW");
     if (!delivered) {
       const tab = await browser.tabs.get(tabId).catch(() => null);
-      if (tab && await injectContentScriptIntoTab(tab) === "injected") {
+      if (tab && didInjectContentScript(await injectContentScriptIntoTab(tab))) {
         delivered = await pushTrailToTab(tabId, "TRAIL_SHOW");
       }
     }

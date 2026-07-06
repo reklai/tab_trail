@@ -55,6 +55,10 @@ test("domain registers all three webNavigation intakes and serializes per tab", 
   assert.match(source, /tabs\.onRemoved\.addListener/);
   assert.match(source, /refreshExtension\(\)/);
   assert.match(source, /activateExistingContentScripts\(\)/);
+  assert.match(source, /"injected-all-frames"/);
+  assert.match(source, /"injected-top-frame"/);
+  assert.match(source, /function shouldRetryContentScriptInjection/);
+  assert.match(source, /outcome === "failed" \|\| outcome === "injected-top-frame"/);
   assert.match(source, /openEntryInNewWindow/);
   assert.match(source, /windows\.create\(\{\s*url:\s*entry\.url\s*\}\)/);
   assert.doesNotMatch(source, /previewEntry|type:\s*"popup"|width:\s*420|height:\s*560/);
