@@ -1,11 +1,15 @@
-// Client-side runtime messaging for extension surfaces (popup, options,
-// content script). The retry variant exists because sendMessage can fail
-// briefly while the MV3 service worker is still waking up (its onMessage
-// listener isn't registered yet). Crucially it retries ONLY that
-// missing-receiver failure — where the message provably never ran — so it is
-// safe for non-idempotent gestures (jump, open-in-new-tab): any other failure
-// may mean the worker DID process the message but the reply was lost, and
-// re-sending would double-execute the action, so those surface immediately.
+// Client-side runtime messaging: extension surfaces (popup, options, content
+// script) send messages to the background service worker through here.
+//
+// The retry variant handles one MV3 quirk: just after the worker spins up,
+// sendMessage can reject with "receiving end does not exist" because the
+// worker's onMessage listener isn't registered yet. Retrying rides that out.
+//
+// It retries ONLY that missing-receiver error, deliberately. Any other
+// rejection might mean the worker received and ran the message but died before
+// replying — re-sending would run the action a second time. Scoping retries to
+// the "never reached the worker" case keeps non-idempotent gestures (jump,
+// open-in-new-tab) safe on the retry variant.
 
 import browser from "webextension-polyfill";
 import { BackgroundRuntimeMessage } from "../../common/contracts/runtimeMessages";

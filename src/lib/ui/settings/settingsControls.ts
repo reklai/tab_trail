@@ -113,6 +113,9 @@ export function createShortcutCaptureController(
     window.removeEventListener("keydown", onKeydown, true);
     window.removeEventListener("mousedown", onMousedown, true);
     if (keepContextMenuGuard) {
+      // Remove the suppressor once the right-click's contextmenu has passed —
+      // but skip it if a new capture has started in the meantime, which would
+      // have re-added the same listener and still needs it.
       window.setTimeout(() => {
         if (!capturing) window.removeEventListener("contextmenu", onContextMenu, true);
       }, CAPTURE_FOLLOWUP_SUPPRESS_MS);

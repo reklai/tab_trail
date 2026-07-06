@@ -151,6 +151,10 @@ export function initApp(): void {
     const openOverlay = (state: TrailState): void => {
       showBreadcrumbTrail(state, {
         settings,
+        // Every callback swallows its own rejection on purpose. If the
+        // background is briefly unreachable and one of these rejects, an
+        // unhandled rejection would reach panelHost's global handler, which
+        // reads any extension-scoped fault as fatal and closes the overlay.
         callbacks: {
           onJump: (index) => {
             void jumpToTrailEntry(index).catch(() => {});

@@ -1,5 +1,5 @@
-// Background-side trail domain: owns every tab's navigation trail and the
-// content-script lifecycle (install-time injection, ready tracking). It feeds
+// Background-side trail domain: owns every tab's navigation trail and injects
+// the content script into already-open tabs at install/refresh time. It feeds
 // webNavigation events through the pure trail reducer, mirrors each tab's
 // state to session storage so an MV3 worker restart loses nothing, and
 // orchestrates breadcrumb jumps (history.go via the content script, with a
