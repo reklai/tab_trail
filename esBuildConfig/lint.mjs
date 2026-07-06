@@ -67,6 +67,32 @@ function walkFiles(dir, extensions, out = []) {
   return out;
 }
 
+const IMPORT_SPECIFIER_PATTERN =
+  /(?:import|export)\s[^"']*?\sfrom\s*["']([^"']+)["']|require\(\s*["']([^"']+)["']\s*\)|import\(\s*["']([^"']+)["']\s*\)/g;
+
+let cachedSourceTsFiles = null;
+function sourceTsFiles() {
+  if (!cachedSourceTsFiles) {
+    cachedSourceTsFiles = walkFiles(resolve(ROOT, "src"), new Set([".ts"]));
+  }
+  return cachedSourceTsFiles;
+}
+
+// Walks every src/**/*.ts file once (cached) and invokes handler for each
+// import/require/dynamic-import specifier, so the import-scanning checks share
+// one file traversal and one regex instead of each repeating both.
+function forEachSourceImport(handler) {
+  for (const fullPath of sourceTsFiles()) {
+    const source = readFileSync(fullPath, "utf8");
+    IMPORT_SPECIFIER_PATTERN.lastIndex = 0;
+    let match;
+    while ((match = IMPORT_SPECIFIER_PATTERN.exec(source)) !== null) {
+      const imported = match[1] || match[2] || match[3];
+      if (imported) handler(fullPath, imported);
+    }
+  }
+}
+
 function getLineNumber(source, index) {
   return source.slice(0, index).split("\n").length;
 }
@@ -94,22 +120,12 @@ function checkPackageDependencies() {
 }
 
 function checkSourceImports() {
-  const tsFiles = walkFiles(resolve(ROOT, "src"), new Set([".ts"]));
-  const importPattern =
-    /(?:import|export)\s[^"']*?\sfrom\s*["']([^"']+)["']|require\(\s*["']([^"']+)["']\s*\)|import\(\s*["']([^"']+)["']\s*\)/g;
-
-  for (const fullPath of tsFiles) {
-    const relPath = relative(ROOT, fullPath);
-    const source = readFileSync(fullPath, "utf8");
-    let match;
-    while ((match = importPattern.exec(source)) !== null) {
-      const imported = match[1] || match[2] || match[3];
-      if (!imported || imported.startsWith(".") || imported.startsWith("/")) continue;
-      if (isBannedPackage(imported)) {
-        errors.push(`${relPath} imports banned UI module "${imported}".`);
-      }
+  forEachSourceImport((fullPath, imported) => {
+    if (imported.startsWith(".") || imported.startsWith("/")) return;
+    if (isBannedPackage(imported)) {
+      errors.push(`${relative(ROOT, fullPath)} imports banned UI module "${imported}".`);
     }
-  }
+  });
 }
 
 function toUnixPath(pathValue) {
@@ -117,24 +133,16 @@ function toUnixPath(pathValue) {
 }
 
 function checkLayerBoundaries() {
-  const tsFiles = walkFiles(resolve(ROOT, "src"), new Set([".ts"]));
-  const importPattern =
-    /(?:import|export)\s[^"']*?\sfrom\s*["']([^"']+)["']|require\(\s*["']([^"']+)["']\s*\)|import\(\s*["']([^"']+)["']\s*\)/g;
+  forEachSourceImport((fullPath, imported) => {
+    if (!imported.startsWith(".") && !imported.startsWith("/")) return;
 
-  for (const fullPath of tsFiles) {
     const relPath = toUnixPath(relative(ROOT, fullPath));
-    const source = readFileSync(fullPath, "utf8");
-    let match;
+    const resolvedImport = toUnixPath(relative(
+      ROOT,
+      resolve(dirname(fullPath), imported),
+    ));
 
-    while ((match = importPattern.exec(source)) !== null) {
-      const imported = match[1] || match[2] || match[3];
-      if (!imported || (!imported.startsWith(".") && !imported.startsWith("/"))) continue;
-
-      const resolvedImport = toUnixPath(relative(
-        ROOT,
-        resolve(dirname(fullPath), imported),
-      ));
-
+    {
       if (relPath.startsWith("src/lib/ui/") && resolvedImport.startsWith("src/lib/backgroundRuntime/")) {
         errors.push(`${relPath} must not import backgroundRuntime modules directly (${imported}).`);
       }
@@ -170,7 +178,7 @@ function checkLayerBoundaries() {
         }
       }
     }
-  }
+  });
 }
 
 function checkOverlayContracts() {

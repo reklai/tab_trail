@@ -24,7 +24,7 @@ export interface ToggleTriggerEvent {
   isTrusted: boolean;
 }
 
-const MODIFIER_KEYS: readonly WayfindModifierKey[] = ["alt", "ctrl", "super"];
+const MODIFIER_KEYS: readonly TabTrailModifierKey[] = ["alt", "ctrl", "super"];
 
 // True only when the event is exactly the configured chord: the chosen
 // modifier held, every other modifier released, Shift matching the setting,
@@ -32,12 +32,12 @@ const MODIFIER_KEYS: readonly WayfindModifierKey[] = ["alt", "ctrl", "super"];
 // released also rejects AltGr, which the browser reports as Ctrl+Alt.
 export function matchesToggleTrigger(
   event: ToggleTriggerEvent,
-  trigger: WayfindTrigger,
+  trigger: TabTrailTrigger,
 ): boolean {
   if (!event.isTrusted) return false;
   if (event.shiftKey !== trigger.withShift) return false;
 
-  const modifierHeld: Record<WayfindModifierKey, boolean> = {
+  const modifierHeld: Record<TabTrailModifierKey, boolean> = {
     alt: event.altKey,
     ctrl: event.ctrlKey,
     super: event.metaKey,
@@ -248,11 +248,29 @@ export function normalizeTrailState(value: unknown): TrailState {
   }
   const raw = value as Partial<TrailState>;
   if (!Array.isArray(raw.entries)) return { entries: [], cursor: -1 };
+
+  // Keep only the most recent entries — this can drop items off the FRONT — and
+  // track where the stored cursor lands so we can remap it to the same entry
+  // after front/middle drops instead of naively clamping to a different page.
+  const rawEntries = raw.entries;
+  const windowed = rawEntries.slice(-TRAIL_MAX_ENTRIES);
+  const droppedFromFront = rawEntries.length - windowed.length;
+  const rawCursor =
+    typeof raw.cursor === "number" && Number.isInteger(raw.cursor)
+      ? raw.cursor
+      : rawEntries.length - 1;
+  const cursorInWindow = rawCursor - droppedFromFront;
+
   const entries: TrailEntry[] = [];
-  for (const item of raw.entries.slice(-TRAIL_MAX_ENTRIES)) {
+  let cursor = -1;
+  for (let i = 0; i < windowed.length; i += 1) {
+    const item = windowed[i];
     if (typeof item !== "object" || item === null) continue;
     const entry = item as Partial<TrailEntry>;
     if (typeof entry.url !== "string" || entry.url === "") continue;
+    // Follow the cursor onto the last surviving entry at or before its stored
+    // position, so a skipped invalid entry or dropped prefix can't shift it.
+    if (i <= cursorInWindow) cursor = entries.length;
     entries.push({
       url: entry.url,
       title: typeof entry.title === "string" ? entry.title : "",
@@ -266,9 +284,7 @@ export function normalizeTrailState(value: unknown): TrailState {
     });
   }
   if (entries.length === 0) return { entries: [], cursor: -1 };
-  const cursor =
-    typeof raw.cursor === "number" && Number.isInteger(raw.cursor)
-      ? Math.min(Math.max(raw.cursor, 0), entries.length - 1)
-      : entries.length - 1;
+  // The cursor's target fell off the front — clamp to the oldest kept entry.
+  if (cursor === -1) cursor = 0;
   return { entries, cursor };
 }

@@ -1,0 +1,20 @@
+{
+  "input": {
+    "storageSchemaVersion": 1,
+    "wayfindSettings": {
+      "trigger": { "modifier": "alt", "kind": "key", "keyCode": "KeyH" },
+      "maxVisibleSegments": 10
+    },
+    "wayfindTrail:42": {
+      "entries": [{ "url": "https://example.com" }]
+    }
+  },
+  "expected": {
+    "storageSchemaVersion": 2,
+    "tabtrailSettings": {
+      "trigger": { "modifier": "alt", "kind": "key", "keyCode": "KeyH" },
+      "maxVisibleSegments": 10
+    }
+  },
+  "expectedChanged": true
+}

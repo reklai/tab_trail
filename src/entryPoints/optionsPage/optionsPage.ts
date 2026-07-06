@@ -5,34 +5,27 @@
 
 import browser from "webextension-polyfill";
 import {
-  DEFAULT_WAYFIND_SETTINGS,
-  DEFAULT_WAYFIND_TRIGGER,
-  formatTriggerKeyLabel,
-  formatTriggerMouseLabel,
-  formatWayfindTriggerCombo,
-  isValidTriggerKeyCode,
-  isValidTriggerMouseButton,
-  loadWayfindSettings,
-  saveWayfindSettings,
-} from "../../lib/common/contracts/wayfind";
-import { refreshWayfindExtension } from "../../lib/adapters/runtime/wayfindApi";
-import { populateModifierSelect } from "../../lib/ui/settings/settingsControls";
+  DEFAULT_TABTRAIL_SETTINGS,
+  DEFAULT_TABTRAIL_TRIGGER,
+  formatTabTrailTriggerCombo,
+  loadTabTrailSettings,
+  saveTabTrailSettings,
+} from "../../lib/common/contracts/tabtrail";
+import { refreshTabTrailExtension } from "../../lib/adapters/runtime/tabtrailApi";
+import {
+  createShortcutCaptureController,
+  populateModifierSelect,
+  ShortcutCaptureController,
+} from "../../lib/ui/settings/settingsControls";
 
-let settings: WayfindSettings = {
-  ...DEFAULT_WAYFIND_SETTINGS,
-  trigger: { ...DEFAULT_WAYFIND_TRIGGER },
+let settings: TabTrailSettings = {
+  ...DEFAULT_TABTRAIL_SETTINGS,
+  trigger: { ...DEFAULT_TABTRAIL_TRIGGER },
 };
-let capturing = false;
-let suppressNextCaptureClick = false;
+let captureController: ShortcutCaptureController | null = null;
 
 function element<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
-}
-
-function triggerButtonLabel(): string {
-  return settings.trigger.kind === "mouse"
-    ? formatTriggerMouseLabel(settings.trigger.mouseButton)
-    : formatTriggerKeyLabel(settings.trigger.keyCode);
 }
 
 function renderSettings(): void {
@@ -42,18 +35,14 @@ function renderSettings(): void {
   const shiftInput = element<HTMLInputElement>("triggerWithShift");
   if (shiftInput) shiftInput.checked = settings.trigger.withShift;
 
-  const captureButton = element("triggerCaptureBtn");
-  if (captureButton && !capturing) {
-    captureButton.textContent = triggerButtonLabel();
-    captureButton.classList.remove("is-capturing");
-  }
+  captureController?.showTrigger(settings.trigger);
 
   const maxVisibleInput = element<HTMLInputElement>("maxVisibleSegments");
   if (maxVisibleInput && document.activeElement !== maxVisibleInput) {
     maxVisibleInput.value = String(settings.maxVisibleSegments);
   }
 
-  const combo = formatWayfindTriggerCombo(settings.trigger);
+  const combo = formatTabTrailTriggerCombo(settings.trigger);
   const shortcutLabel = element("shortcutLabel");
   if (shortcutLabel) shortcutLabel.textContent = `Press ${combo} to show your trail`;
 
@@ -63,18 +52,18 @@ function renderSettings(): void {
 }
 
 async function persistSettings(): Promise<void> {
-  await saveWayfindSettings(settings);
-  settings = await loadWayfindSettings();
+  await saveTabTrailSettings(settings);
+  settings = await loadTabTrailSettings();
   renderSettings();
 }
 
-async function refreshWayfind(): Promise<void> {
+async function refreshTabTrail(): Promise<void> {
   const refreshBtn = element<HTMLButtonElement>("refreshBtn");
   if (!refreshBtn) return;
   const originalLabel = refreshBtn.textContent || "Refresh";
   refreshBtn.disabled = true;
   try {
-    const result = await refreshWayfindExtension().catch(() => ({
+    const result = await refreshTabTrailExtension().catch(() => ({
       ok: false,
       reason: "Refresh failed",
     }));
@@ -92,78 +81,9 @@ async function refreshWayfind(): Promise<void> {
   }
 }
 
-function captureKeydown(event: KeyboardEvent): void {
-  event.preventDefault();
-  event.stopPropagation();
-  if (event.key === "Escape") {
-    stopCapture();
-    return;
-  }
-  if (isValidTriggerKeyCode(event.code)) {
-    settings = {
-      ...settings,
-      trigger: { ...settings.trigger, kind: "key", keyCode: event.code },
-    };
-    stopCapture();
-    void persistSettings();
-  }
-  // Modifier-only presses keep the capture open until a valid key arrives.
-}
-
-function captureMousedown(event: MouseEvent): void {
-  if (!isValidTriggerMouseButton(event.button)) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  suppressNextCaptureClick = true;
-  window.setTimeout(() => {
-    suppressNextCaptureClick = false;
-  }, 250);
-  settings = {
-    ...settings,
-    trigger: { ...settings.trigger, kind: "mouse", mouseButton: event.button },
-  };
-  stopCapture();
-  void persistSettings();
-}
-
-function captureContextMenu(event: MouseEvent): void {
-  // Right-button captures must not also open the page context menu.
-  event.preventDefault();
-  event.stopPropagation();
-}
-
-function startCapture(): void {
-  if (capturing) return;
-  capturing = true;
-  const captureButton = element("triggerCaptureBtn");
-  if (captureButton) {
-    captureButton.textContent = "Press key / click";
-    captureButton.classList.add("is-capturing");
-  }
-  // Delay the mousedown hook one tick so the click that opened the capture
-  // does not immediately cancel it.
-  window.setTimeout(() => {
-    if (!capturing) return;
-    window.addEventListener("keydown", captureKeydown, true);
-    window.addEventListener("mousedown", captureMousedown, true);
-    window.addEventListener("contextmenu", captureContextMenu, true);
-  }, 0);
-}
-
-function stopCapture(): void {
-  if (!capturing) return;
-  capturing = false;
-  window.removeEventListener("keydown", captureKeydown, true);
-  window.removeEventListener("mousedown", captureMousedown, true);
-  window.removeEventListener("contextmenu", captureContextMenu, true);
-  renderSettings();
-}
-
 function bindControls(): void {
   element<HTMLSelectElement>("triggerModifier")?.addEventListener("change", (event) => {
-    const modifier = (event.target as HTMLSelectElement).value as WayfindModifierKey;
+    const modifier = (event.target as HTMLSelectElement).value as TabTrailModifierKey;
     settings = { ...settings, trigger: { ...settings.trigger, modifier } };
     void persistSettings();
   });
@@ -172,16 +92,6 @@ function bindControls(): void {
     const withShift = (event.target as HTMLInputElement).checked;
     settings = { ...settings, trigger: { ...settings.trigger, withShift } };
     void persistSettings();
-  });
-
-  element("triggerCaptureBtn")?.addEventListener("click", (event) => {
-    if (suppressNextCaptureClick) {
-      event.preventDefault();
-      event.stopPropagation();
-      suppressNextCaptureClick = false;
-      return;
-    }
-    startCapture();
   });
 
   element<HTMLInputElement>("maxVisibleSegments")?.addEventListener("change", (event) => {
@@ -196,12 +106,12 @@ function bindControls(): void {
   });
 
   element("resetShortcutBtn")?.addEventListener("click", () => {
-    settings = { ...settings, trigger: { ...DEFAULT_WAYFIND_TRIGGER } };
+    settings = { ...settings, trigger: { ...DEFAULT_TABTRAIL_TRIGGER } };
     void persistSettings();
   });
 
   element("refreshBtn")?.addEventListener("click", () => {
-    void refreshWayfind();
+    void refreshTabTrail();
   });
 
   element("closeBtn")?.addEventListener("click", async () => {
@@ -213,7 +123,14 @@ function bindControls(): void {
 }
 
 async function init(): Promise<void> {
-  settings = await loadWayfindSettings();
+  settings = await loadTabTrailSettings();
+  const captureButton = element("triggerCaptureBtn");
+  if (captureButton) {
+    captureController = createShortcutCaptureController(captureButton, (patch) => {
+      settings = { ...settings, trigger: { ...settings.trigger, ...patch } };
+      void persistSettings();
+    });
+  }
   renderSettings();
   bindControls();
 }

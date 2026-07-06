@@ -1,14 +1,14 @@
 {
   "input": {
-    "storageSchemaVersion": 2,
-    "wayfindSettings": {
+    "storageSchemaVersion": 3,
+    "tabtrailSettings": {
       "trigger": { "modifier": "alt", "kind": "key", "keyCode": "KeyH" },
       "futureFieldFromNewerBuild": true
     }
   },
   "expected": {
-    "storageSchemaVersion": 2,
-    "wayfindSettings": {
+    "storageSchemaVersion": 3,
+    "tabtrailSettings": {
       "trigger": { "modifier": "alt", "kind": "key", "keyCode": "KeyH" },
       "futureFieldFromNewerBuild": true
     }

@@ -22,15 +22,15 @@ export interface BreadcrumbTrailCallbacks {
   onOpenInNewWindow(index: number): void;
   onOpenOptions(): void;
   onClose(): void;
-  onPositionChange(position: WayfindOverlayPosition): void;
+  onPositionChange(position: TabTrailOverlayPosition): void;
 }
 
 export interface BreadcrumbTrailOptions {
-  settings: WayfindSettings;
+  settings: TabTrailSettings;
   callbacks: BreadcrumbTrailCallbacks;
 }
 
-const DEFAULT_POSITION: WayfindOverlayPosition = { xPercent: 50, yPercent: 8 };
+const DEFAULT_POSITION: TabTrailOverlayPosition = { xPercent: 50, yPercent: 8 };
 const HOVER_DETAIL_DELAY_MS = 350;
 const PREVIEW_VIEWPORT_MARGIN = 12;
 const PREVIEW_GAP = 12;
@@ -45,7 +45,7 @@ interface OverlaySession {
   options: BreadcrumbTrailOptions;
   state: TrailState;
   expanded: boolean;
-  position: WayfindOverlayPosition;
+  position: TabTrailOverlayPosition;
 }
 
 let session: OverlaySession | null = null;
@@ -144,16 +144,10 @@ function entryUrlSubtitle(entry: TrailEntry): string {
   }
 }
 
-function branchConnectorElement(
-  nextEntry: TrailEntry,
-  showTransitionArrows: boolean,
-): HTMLElement {
+function branchConnectorElement(nextEntry: TrailEntry): HTMLElement {
   const connector = document.createElement("div");
   connector.className = "wf-branch-connector";
   connector.setAttribute("aria-hidden", "true");
-  if (!showTransitionArrows) {
-    return connector;
-  }
   // Differentiate how the next hop happened: a followed link vs an address-bar
   // entry vs in-page (SPA/hash) routing.
   if (nextEntry.transition === "typed") {
@@ -220,13 +214,10 @@ function renderBar(): void {
     if (previousRendered !== null) {
       if (index > previousRendered + 1) {
         const firstHiddenIndex = previousRendered + 1;
-        branchList.appendChild(branchConnectorElement(
-          state.entries[firstHiddenIndex],
-          settings.showTransitionArrows,
-        ));
+        branchList.appendChild(branchConnectorElement(state.entries[firstHiddenIndex]));
         branchList.appendChild(buildMorePill(index - previousRendered - 1));
       }
-      branchList.appendChild(branchConnectorElement(state.entries[index], settings.showTransitionArrows));
+      branchList.appendChild(branchConnectorElement(state.entries[index]));
     }
     branchList.appendChild(buildBranchRow(index, state, callbacks));
     previousRendered = index;

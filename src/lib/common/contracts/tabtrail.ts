@@ -1,23 +1,23 @@
-// Shared Wayfind contract: storage keys, setting defaults, and normalizers.
+// Shared TabTrail contract: storage keys, setting defaults, and normalizers.
 // Every surface (background, content script, popup, options) passes stored
 // values through the normalizers here, so data stays valid even when written
 // by an older version or changed outside the extension.
 
 import browser from "webextension-polyfill";
 
-export const WAYFIND_STORAGE_KEYS = {
-  settings: "wayfindSettings",
+export const TABTRAIL_STORAGE_KEYS = {
+  settings: "tabtrailSettings",
 } as const;
 
 // Per-tab trail mirrors live under this prefix in session storage (or in
 // local storage on browsers without storage.session, wiped at startup).
-export const TRAIL_MIRROR_KEY_PREFIX = "wayfindTrail:";
+export const TRAIL_MIRROR_KEY_PREFIX = "tabtrailTrail:";
 
 export function trailMirrorKey(tabId: number): string {
   return `${TRAIL_MIRROR_KEY_PREFIX}${tabId}`;
 }
 
-export const WAYFIND_MODIFIER_KEYS: readonly WayfindModifierKey[] = [
+export const TABTRAIL_MODIFIER_KEYS: readonly TabTrailModifierKey[] = [
   "alt",
   "ctrl",
   "super",
@@ -32,7 +32,7 @@ export const TRIGGER_MOUSE_BUTTONS: readonly number[] = [0, 1, 2] as const;
 export const MIN_VISIBLE_SEGMENTS = 5;
 export const MAX_VISIBLE_SEGMENTS = 12;
 
-export const DEFAULT_WAYFIND_TRIGGER: WayfindTrigger = {
+export const DEFAULT_TABTRAIL_TRIGGER: TabTrailTrigger = {
   modifier: "alt",
   withShift: false,
   kind: "key",
@@ -40,16 +40,15 @@ export const DEFAULT_WAYFIND_TRIGGER: WayfindTrigger = {
   mouseButton: 1,
 };
 
-export const DEFAULT_WAYFIND_SETTINGS: WayfindSettings = {
-  trigger: DEFAULT_WAYFIND_TRIGGER,
-  showTransitionArrows: true,
+export const DEFAULT_TABTRAIL_SETTINGS: TabTrailSettings = {
+  trigger: DEFAULT_TABTRAIL_TRIGGER,
   overlayPosition: null,
   maxVisibleSegments: 8,
 };
 
-function normalizeModifierKey(value: unknown, fallback: WayfindModifierKey): WayfindModifierKey {
-  return WAYFIND_MODIFIER_KEYS.includes(value as WayfindModifierKey)
-    ? (value as WayfindModifierKey)
+function normalizeModifierKey(value: unknown, fallback: TabTrailModifierKey): TabTrailModifierKey {
+  return TABTRAIL_MODIFIER_KEYS.includes(value as TabTrailModifierKey)
+    ? (value as TabTrailModifierKey)
     : fallback;
 }
 
@@ -65,29 +64,29 @@ function normalizeFlag(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
-export function normalizeWayfindTrigger(value: unknown): WayfindTrigger {
+export function normalizeTabTrailTrigger(value: unknown): TabTrailTrigger {
   if (typeof value !== "object" || value === null) {
-    return { ...DEFAULT_WAYFIND_TRIGGER };
+    return { ...DEFAULT_TABTRAIL_TRIGGER };
   }
-  const trigger = value as Partial<WayfindTrigger>;
+  const trigger = value as Partial<TabTrailTrigger>;
   const keyCode = isValidTriggerKeyCode(trigger.keyCode)
     ? trigger.keyCode
-    : DEFAULT_WAYFIND_TRIGGER.keyCode;
+    : DEFAULT_TABTRAIL_TRIGGER.keyCode;
   const mouseButton = isValidTriggerMouseButton(trigger.mouseButton)
     ? trigger.mouseButton
-    : DEFAULT_WAYFIND_TRIGGER.mouseButton;
+    : DEFAULT_TABTRAIL_TRIGGER.mouseButton;
   return {
-    modifier: normalizeModifierKey(trigger.modifier, DEFAULT_WAYFIND_TRIGGER.modifier),
-    withShift: normalizeFlag(trigger.withShift, DEFAULT_WAYFIND_TRIGGER.withShift),
+    modifier: normalizeModifierKey(trigger.modifier, DEFAULT_TABTRAIL_TRIGGER.modifier),
+    withShift: normalizeFlag(trigger.withShift, DEFAULT_TABTRAIL_TRIGGER.withShift),
     kind: trigger.kind === "mouse" ? "mouse" : "key",
     keyCode,
     mouseButton,
   };
 }
 
-function normalizeOverlayPosition(value: unknown): WayfindOverlayPosition | null {
+function normalizeOverlayPosition(value: unknown): TabTrailOverlayPosition | null {
   if (typeof value !== "object" || value === null) return null;
-  const position = value as Partial<WayfindOverlayPosition>;
+  const position = value as Partial<TabTrailOverlayPosition>;
   const x = Number(position.xPercent);
   const y = Number(position.yPercent);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
@@ -99,24 +98,23 @@ function normalizeOverlayPosition(value: unknown): WayfindOverlayPosition | null
 
 function normalizeMaxVisibleSegments(value: unknown): number {
   const numeric = Number(value);
-  if (!Number.isInteger(numeric)) return DEFAULT_WAYFIND_SETTINGS.maxVisibleSegments;
+  if (!Number.isInteger(numeric)) return DEFAULT_TABTRAIL_SETTINGS.maxVisibleSegments;
   return Math.min(Math.max(numeric, MIN_VISIBLE_SEGMENTS), MAX_VISIBLE_SEGMENTS);
 }
 
-export function normalizeWayfindSettings(value: unknown): WayfindSettings {
+export function normalizeTabTrailSettings(value: unknown): TabTrailSettings {
   if (typeof value !== "object" || value === null) {
-    return { ...DEFAULT_WAYFIND_SETTINGS, trigger: { ...DEFAULT_WAYFIND_TRIGGER } };
+    return { ...DEFAULT_TABTRAIL_SETTINGS, trigger: { ...DEFAULT_TABTRAIL_TRIGGER } };
   }
-  const settings = value as Partial<WayfindSettings>;
+  const settings = value as Partial<TabTrailSettings>;
   return {
-    trigger: normalizeWayfindTrigger(settings.trigger),
-    showTransitionArrows: true,
+    trigger: normalizeTabTrailTrigger(settings.trigger),
     overlayPosition: normalizeOverlayPosition(settings.overlayPosition),
     maxVisibleSegments: normalizeMaxVisibleSegments(settings.maxVisibleSegments),
   };
 }
 
-export function formatWayfindModifierKey(modifier: WayfindModifierKey): string {
+export function formatTabTrailModifierKey(modifier: TabTrailModifierKey): string {
   if (modifier === "ctrl") return "Ctrl / Control";
   if (modifier === "super") return "Super / Command";
   return "Alt / Option";
@@ -135,8 +133,8 @@ export function formatTriggerMouseLabel(button: number): string {
   return `Mouse Button ${button}`;
 }
 
-export function formatWayfindTriggerCombo(trigger: WayfindTrigger): string {
-  const parts = [formatWayfindModifierKey(trigger.modifier).split(" / ")[0]];
+export function formatTabTrailTriggerCombo(trigger: TabTrailTrigger): string {
+  const parts = [formatTabTrailModifierKey(trigger.modifier).split(" / ")[0]];
   if (trigger.withShift) parts.push("Shift");
   parts.push(
     trigger.kind === "mouse"
@@ -146,17 +144,17 @@ export function formatWayfindTriggerCombo(trigger: WayfindTrigger): string {
   return parts.join(" + ");
 }
 
-export async function loadWayfindSettings(): Promise<WayfindSettings> {
+export async function loadTabTrailSettings(): Promise<TabTrailSettings> {
   try {
-    const data = await browser.storage.local.get(WAYFIND_STORAGE_KEYS.settings);
-    return normalizeWayfindSettings(data[WAYFIND_STORAGE_KEYS.settings]);
+    const data = await browser.storage.local.get(TABTRAIL_STORAGE_KEYS.settings);
+    return normalizeTabTrailSettings(data[TABTRAIL_STORAGE_KEYS.settings]);
   } catch (_) {
-    return { ...DEFAULT_WAYFIND_SETTINGS, trigger: { ...DEFAULT_WAYFIND_TRIGGER } };
+    return { ...DEFAULT_TABTRAIL_SETTINGS, trigger: { ...DEFAULT_TABTRAIL_TRIGGER } };
   }
 }
 
-export async function saveWayfindSettings(settings: WayfindSettings): Promise<void> {
+export async function saveTabTrailSettings(settings: TabTrailSettings): Promise<void> {
   await browser.storage.local.set({
-    [WAYFIND_STORAGE_KEYS.settings]: normalizeWayfindSettings(settings),
+    [TABTRAIL_STORAGE_KEYS.settings]: normalizeTabTrailSettings(settings),
   });
 }

@@ -1,28 +1,27 @@
 // Content-script application: captures the toggle chord (keyboard or mouse)
 // on every page and, in the top frame, hosts the branch overlay and
 // executes history.go jumps. initApp() runs once per frame and is safe to
-// re-run — it first calls the previous instance's window.__wayfindCleanup, so
+// re-run — it first calls the previous instance's window.__tabtrailCleanup, so
 // re-injecting from code (installs, updates) never stacks listeners.
 
 import browser from "webextension-polyfill";
 import {
-  loadWayfindSettings,
-  normalizeWayfindSettings,
-  saveWayfindSettings,
-  WAYFIND_STORAGE_KEYS,
-} from "../common/contracts/wayfind";
+  loadTabTrailSettings,
+  normalizeTabTrailSettings,
+  saveTabTrailSettings,
+  TABTRAIL_STORAGE_KEYS,
+} from "../common/contracts/tabtrail";
 import { ContentRuntimeMessage } from "../common/contracts/runtimeMessages";
 import { matchesToggleTrigger } from "../core/trail/trailCore";
 import type { ToggleTriggerEvent } from "../core/trail/trailCore";
 import {
-  announceTrailContentReady,
   jumpToTrailEntry,
   openTrailEntryInNewTab,
   openTrailEntryInNewWindow,
-  openWayfindOptions,
+  openTabTrailOptions,
   reportTrailOverlayState,
   toggleTrailOverlay,
-} from "../adapters/runtime/wayfindApi";
+} from "../adapters/runtime/tabtrailApi";
 import {
   hideBreadcrumbTrail,
   isBreadcrumbTrailOpen,
@@ -32,7 +31,7 @@ import {
 
 declare global {
   interface Window {
-    __wayfindCleanup?: () => void;
+    __tabtrailCleanup?: () => void;
   }
 }
 
@@ -51,15 +50,15 @@ function isTopFrame(): boolean {
 }
 
 export function initApp(): void {
-  window.__wayfindCleanup?.();
+  window.__tabtrailCleanup?.();
 
-  let settings = normalizeWayfindSettings(null);
+  let settings = normalizeTabTrailSettings(null);
   let disposed = false;
   const topFrame = isTopFrame();
   let swallowMouseUntil = 0;
   let swallowedButton = -1;
 
-  void loadWayfindSettings().then((loaded) => {
+  void loadTabTrailSettings().then((loaded) => {
     if (!disposed) settings = loaded;
   });
 
@@ -113,7 +112,13 @@ export function initApp(): void {
 
   const mouseFollowUpHandler = (event: MouseEvent): void => {
     if (performance.now() > swallowMouseUntil) return;
-    if (event.type !== "contextmenu" && event.button !== swallowedButton) return;
+    // A contextmenu follow-up only belongs to a right-button chord; other
+    // follow-ups (click/auxclick) must match the button that armed the window.
+    // This keeps a left/middle chord from eating an unrelated right-click menu.
+    const relevant = event.type === "contextmenu"
+      ? swallowedButton === 2
+      : event.button === swallowedButton;
+    if (!relevant) return;
     event.preventDefault();
     event.stopImmediatePropagation();
   };
@@ -130,8 +135,8 @@ export function initApp(): void {
     changes: Record<string, browser.Storage.StorageChange>,
     areaName: string,
   ): void => {
-    if (areaName !== "local" || !changes[WAYFIND_STORAGE_KEYS.settings]) return;
-    settings = normalizeWayfindSettings(changes[WAYFIND_STORAGE_KEYS.settings].newValue);
+    if (areaName !== "local" || !changes[TABTRAIL_STORAGE_KEYS.settings]) return;
+    settings = normalizeTabTrailSettings(changes[TABTRAIL_STORAGE_KEYS.settings].newValue);
   };
   browser.storage.onChanged.addListener(storageChangedHandler);
 
@@ -148,22 +153,22 @@ export function initApp(): void {
         settings,
         callbacks: {
           onJump: (index) => {
-            void jumpToTrailEntry(index);
+            void jumpToTrailEntry(index).catch(() => {});
           },
           onOpenInNewTab: (index) => {
-            void openTrailEntryInNewTab(index);
+            void openTrailEntryInNewTab(index).catch(() => {});
           },
           onOpenInNewWindow: (index) => {
-            void openTrailEntryInNewWindow(index);
+            void openTrailEntryInNewWindow(index).catch(() => {});
           },
           onOpenOptions: () => {
-            void openWayfindOptions();
+            void openTabTrailOptions().catch(() => {});
           },
           onClose: () => {
             void reportTrailOverlayState(false).catch(() => {});
           },
           onPositionChange: (position) => {
-            void saveWayfindSettings({ ...settings, overlayPosition: position });
+            void saveTabTrailSettings({ ...settings, overlayPosition: position }).catch(() => {});
           },
         },
       });
@@ -174,7 +179,7 @@ export function initApp(): void {
       if (typeof message !== "object" || message === null) return undefined;
       const typed = message as ContentRuntimeMessage;
       switch (typed.type) {
-        case "WAYFIND_PING":
+        case "TABTRAIL_PING":
           return Promise.resolve({ ok: true });
         case "TRAIL_SHOW":
           if (isBreadcrumbTrailOpen()) {
@@ -204,11 +209,9 @@ export function initApp(): void {
       hideBreadcrumbTrail();
     };
     window.addEventListener("pagehide", pageHideHandler);
-
-    void announceTrailContentReady().catch(() => {});
   }
 
-  window.__wayfindCleanup = (): void => {
+  window.__tabtrailCleanup = (): void => {
     disposed = true;
     window.removeEventListener("keydown", keydownHandler, true);
     window.removeEventListener("mousedown", mousedownHandler, true);
@@ -219,6 +222,6 @@ export function initApp(): void {
     if (messageHandler) browser.runtime.onMessage.removeListener(messageHandler);
     if (pageHideHandler) window.removeEventListener("pagehide", pageHideHandler);
     if (isBreadcrumbTrailOpen()) hideBreadcrumbTrail();
-    delete window.__wayfindCleanup;
+    delete window.__tabtrailCleanup;
   };
 }

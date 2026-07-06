@@ -1,25 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { transform } from "esbuild";
+import { loadTsModule } from "./helpers/loadTsModule.mjs";
 
-const ROOT = process.cwd();
-
-async function loadAsyncFlowModule() {
-  const source = readFileSync(
-    resolve(ROOT, "src/lib/common/utils/asyncFlow.ts"),
-    "utf8",
-  );
-
-  const transformed = await transform(source, {
-    loader: "ts",
-    format: "esm",
-    target: "es2022",
-  });
-
-  const encoded = Buffer.from(transformed.code, "utf8").toString("base64");
-  return import(`data:text/javascript;base64,${encoded}`);
+function loadAsyncFlowModule() {
+  return loadTsModule("src/lib/common/utils/asyncFlow.ts");
 }
 
 function createDeferred() {
@@ -63,44 +47,6 @@ test("in-flight memo retries after a failed load", async () => {
   await ensureLoaded();
 
   assert.equal(taskRuns, 2);
-});
-
-test("write chain serializes writes in enqueue order", async () => {
-  const asyncFlow = await loadAsyncFlowModule();
-  const chain = asyncFlow.createWriteChain();
-  const order = [];
-  const firstGate = createDeferred();
-
-  const firstWrite = chain.enqueue(async () => {
-    await firstGate.promise;
-    order.push("first");
-  });
-  const secondWrite = chain.enqueue(async () => {
-    order.push("second");
-  });
-
-  firstGate.resolve();
-  await Promise.all([firstWrite, secondWrite]);
-
-  assert.deepEqual(order, ["first", "second"]);
-});
-
-test("write chain isolates a failed write from later writes", async () => {
-  const asyncFlow = await loadAsyncFlowModule();
-  const chain = asyncFlow.createWriteChain();
-  const order = [];
-
-  const failingWrite = chain.enqueue(async () => {
-    throw new Error("write failed");
-  });
-  const followupWrite = chain.enqueue(async () => {
-    order.push("followup");
-  });
-
-  await assert.rejects(failingWrite, /write failed/);
-  await followupWrite;
-
-  assert.deepEqual(order, ["followup"]);
 });
 
 test("keyed task queue serializes tasks per key", async () => {

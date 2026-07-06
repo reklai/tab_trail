@@ -132,32 +132,36 @@ for (const [name, manifest] of [
   }
 }
 
+// Single source of truth for every shipped PNG. `iconSize` marks the
+// toolbar/store icons that must also appear in each manifest's `icons` map;
+// `dimensions` is the required pixel size. This one table drives the manifest
+// icon check, the existence check, and the dimension check below.
+const pngAssets = [
+  { path: "src/icons/icon-32.png", iconSize: 32, dimensions: [32, 32] },
+  { path: "src/icons/icon-48.png", iconSize: 48, dimensions: [48, 48] },
+  { path: "src/icons/icon-64.png", iconSize: 64, dimensions: [64, 64] },
+  { path: "src/icons/icon-96.png", iconSize: 96, dimensions: [96, 96] },
+  { path: "src/icons/icon-128.png", iconSize: 128, dimensions: [128, 128] },
+  { path: "src/icons/icon-1024.png", dimensions: [1024, 1024] },
+  { path: "src/icons/promo-440x280.png", dimensions: [440, 280] },
+  { path: "src/icons/marquee-1400x560.png", dimensions: [1400, 560] },
+];
+
+const requiredIconSizes = pngAssets
+  .filter((asset) => asset.iconSize !== undefined)
+  .map((asset) => String(asset.iconSize));
+
 for (const [name, manifest] of [
   ["MV2", manifestV2],
   ["MV3", manifestV3],
 ]) {
   const icons = manifest.icons || {};
-  for (const size of ["32", "48", "64", "96", "128"]) {
+  for (const size of requiredIconSizes) {
     if (!icons[size]) {
       errors.push(`${name} icons must include size ${size}.`);
     }
   }
 }
-
-const requiredPngSizes = {
-  "src/icons/icon-32.png": 32,
-  "src/icons/icon-48.png": 48,
-  "src/icons/icon-64.png": 64,
-  "src/icons/icon-96.png": 96,
-  "src/icons/icon-128.png": 128,
-};
-
-const requiredPngDimensions = {
-  ...Object.fromEntries(Object.entries(requiredPngSizes).map(([file, size]) => [file, [size, size]])),
-  "src/icons/icon-1024.png": [1024, 1024],
-  "src/icons/promo-440x280.png": [440, 280],
-  "src/icons/marquee-1400x560.png": [1400, 560],
-};
 
 const requiredSourceFiles = [
   "src/entryPoints/contentScript/contentScript.ts",
@@ -168,14 +172,7 @@ const requiredSourceFiles = [
   "src/entryPoints/toolbarPopup/toolbarPopup.css",
   "src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.ts",
   "src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.css",
-  "src/icons/icon-32.png",
-  "src/icons/icon-48.png",
-  "src/icons/icon-64.png",
-  "src/icons/icon-96.png",
-  "src/icons/icon-128.png",
-  "src/icons/icon-1024.png",
-  "src/icons/promo-440x280.png",
-  "src/icons/marquee-1400x560.png",
+  ...pngAssets.map((asset) => asset.path),
 ];
 for (const requiredFile of requiredSourceFiles) {
   if (!fileExists(requiredFile)) {
@@ -183,7 +180,7 @@ for (const requiredFile of requiredSourceFiles) {
   }
 }
 
-for (const [pngPath, [expectedWidth, expectedHeight]] of Object.entries(requiredPngDimensions)) {
+for (const { path: pngPath, dimensions: [expectedWidth, expectedHeight] } of pngAssets) {
   if (!fileExists(pngPath)) continue;
   const dimensions = pngDimensions(pngPath);
   if (!dimensions || dimensions.width !== expectedWidth || dimensions.height !== expectedHeight) {

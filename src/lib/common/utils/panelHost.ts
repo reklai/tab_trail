@@ -2,63 +2,16 @@
 // trapping so keyboard input stays inside the panel instead of the address bar.
 
 import browser from "webextension-polyfill";
-import { escapeHtml } from "./helpers";
 
 export interface PanelHost {
   host: HTMLDivElement;
   shadow: ShadowRoot;
 }
 
-export interface PanelModalSession {
-  dispose(): void;
-}
-
-export type PanelModalEventType =
-  | "keydown"
-  | "keypress"
-  | "keyup"
-  | "pointerdown"
-  | "pointerup"
-  | "mousedown"
-  | "mouseup"
-  | "click"
-  | "auxclick"
-  | "contextmenu";
-
-export interface PanelModalSessionOptions {
-  root: ShadowRoot;
-  onClose: () => void;
-  containEvents?: boolean;
-  closeOnEscape?: boolean;
-  closeOnFullscreenChange?: boolean;
-  closeOnPageHide?: boolean;
-  closeOnVisibilityHidden?: boolean;
-  eventTypes?: readonly PanelModalEventType[];
-}
-
-interface FooterHintSpec {
-  key: string;
-  desc: string;
-  active?: boolean;
-}
-
 // Active panel cleanup — called before opening a new panel so the previous
 // panel's keydown listener (registered on document) is properly removed.
 let activePanelCleanup: (() => void) | null = null;
 let activePanelFailSafeCleanup: (() => void) | null = null;
-
-const DEFAULT_PANEL_MODAL_EVENT_TYPES: readonly PanelModalEventType[] = [
-  "keydown",
-  "keypress",
-  "keyup",
-  "pointerdown",
-  "pointerup",
-  "mousedown",
-  "mouseup",
-  "click",
-  "auxclick",
-  "contextmenu",
-];
 
 function invokeCleanupSafely(
   label: string,
@@ -242,105 +195,12 @@ export function removePanelHost(): void {
   activePanelCleanup = null;
 }
 
-export function createPanelModalSession(options: PanelModalSessionOptions): PanelModalSession {
-  const root = options.root;
-  const host = root.host;
-  const eventTypes = options.eventTypes ?? DEFAULT_PANEL_MODAL_EVENT_TYPES;
-  const containEvents = options.containEvents !== false;
-  const closeOnEscape = options.closeOnEscape !== false;
-  let disposed = false;
-
-  const dispose = (): void => {
-    if (disposed) return;
-    disposed = true;
-    for (const eventType of eventTypes) {
-      root.removeEventListener(eventType, modalEventHandler);
-    }
-    document.removeEventListener("keydown", documentKeyHandler, true);
-    document.removeEventListener("fullscreenchange", fullscreenChangeHandler, true);
-    document.removeEventListener("visibilitychange", visibilityChangeHandler, true);
-    window.removeEventListener("pagehide", pageHideHandler, true);
-  };
-
-  const requestClose = (): void => {
-    if (disposed) return;
-    dispose();
-    options.onClose();
-  };
-
-  function isPanelEvent(event: Event): boolean {
-    const path = event.composedPath();
-    return path.includes(root) || path.includes(host);
-  }
-
-  function modalEventHandler(event: Event): void {
-    if (containEvents) event.stopPropagation();
-    if (closeOnEscape && event instanceof KeyboardEvent && event.key === "Escape") {
-      event.preventDefault();
-      requestClose();
-    }
-  }
-
-  function documentKeyHandler(event: KeyboardEvent): void {
-    if (!closeOnEscape || event.key !== "Escape" || !isPanelEvent(event)) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    requestClose();
-  }
-
-  function fullscreenChangeHandler(): void {
-    if (options.closeOnFullscreenChange !== true) return;
-    requestClose();
-  }
-
-  function pageHideHandler(): void {
-    if (options.closeOnPageHide !== true) return;
-    requestClose();
-  }
-
-  function visibilityChangeHandler(): void {
-    if (options.closeOnVisibilityHidden !== true) return;
-    if (document.visibilityState !== "hidden") return;
-    requestClose();
-  }
-
-  for (const eventType of eventTypes) {
-    root.addEventListener(eventType, modalEventHandler);
-  }
-  document.addEventListener("keydown", documentKeyHandler, true);
-  document.addEventListener("fullscreenchange", fullscreenChangeHandler, true);
-  document.addEventListener("visibilitychange", visibilityChangeHandler, true);
-  window.addEventListener("pagehide", pageHideHandler, true);
-
-  return { dispose };
-}
-
 /** Fully dismiss the active panel — cleanup listeners + remove DOM. */
 export function dismissPanel(): void {
   const cleanup = activePanelCleanup;
   activePanelCleanup = null;
   invokeCleanupSafely("Panel cleanup failed during dismiss", cleanup);
   removePanelHost();
-}
-
-function footerHintHtml(hint: FooterHintSpec): string {
-  const activeClass = hint.active ? " ht-footer-hint-active" : "";
-  return `<span class="ht-footer-hint${activeClass}">
-    <strong class="ht-footer-key">${escapeHtml(hint.key)}</strong>
-    <span class="ht-footer-desc">${escapeHtml(hint.desc)}</span>
-  </span>`;
-}
-
-export function footerRowHtml(hints: FooterHintSpec[]): string {
-  if (hints.length === 0) return `<div class="ht-footer-row"></div>`;
-  const pieces: string[] = [];
-  for (let i = 0; i < hints.length; i++) {
-    if (i > 0) {
-      pieces.push(`<span class="ht-footer-sep" aria-hidden="true">|</span>`);
-    }
-    pieces.push(footerHintHtml(hints[i]));
-  }
-  return `<div class="ht-footer-row">${pieces.join("")}</div>`;
 }
 
 /** Shared overlay shell styles used by all panels */

@@ -27,8 +27,8 @@ test("README documents the trigger, the tracking API, and the session-only model
 
 test("PRIVACY documents the stored keys and the no-collection stance", () => {
   const privacy = readText("PRIVACY.md");
-  assert.match(privacy, /wayfindSettings/);
-  assert.match(privacy, /wayfindTrail:/);
+  assert.match(privacy, /tabtrailSettings/);
+  assert.match(privacy, /tabtrailTrail:/);
   assert.match(privacy, /storageSchemaVersion/);
   assert.match(privacy, /does not collect, transmit, or share/);
 });

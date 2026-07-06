@@ -6,10 +6,10 @@ the extension. Everything stays on your device.
 
 ## What is stored, and where
 
-- `wayfindSettings` (local extension storage, `storage.local`) - your shortcut
+- `tabtrailSettings` (local extension storage, `storage.local`) - your shortcut
   configuration (modifier, optional Shift, key or mouse button), overlay
   position, and display options.
-- `wayfindTrail:<tabId>` entries (session storage, `storage.session`) - each
+- `tabtrailTrail:<tabId>` entries (session storage, `storage.session`) - each
   tab's navigation trail: page URLs, titles, favicon URLs, and timestamps.
   Session storage is held in memory and **cleared when the browser closes**; a
   trail is also deleted the moment its tab closes. On browsers without

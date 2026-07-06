@@ -8,7 +8,7 @@
 // wiped on browser startup, and incognito tabs are never mirrored at all.
 
 import browser, { Tabs } from "webextension-polyfill";
-import { TRAIL_MIRROR_KEY_PREFIX, trailMirrorKey } from "../../common/contracts/wayfind";
+import { TRAIL_MIRROR_KEY_PREFIX, trailMirrorKey } from "../../common/contracts/tabtrail";
 import {
   applyNavigationEvent,
   EMPTY_TRAIL_STATE,
@@ -16,6 +16,7 @@ import {
   resolveJumpPlan,
 } from "../../core/trail/trailCore";
 import { createInFlightMemo, createKeyedTaskQueue } from "../../common/utils/asyncFlow";
+import { isKnownBrowserStoreRestrictedUrl } from "../../common/utils/restrictedUrls";
 
 // --- Surfaces not fully covered by the polyfill types ---
 
@@ -40,14 +41,12 @@ interface NavigationDetails {
 
 export interface TrailDomain {
   ensureLoaded(): Promise<void>;
-  toggleOverlay(senderTab?: Tabs.Tab): Promise<WayfindActionResult>;
-  getTrail(tabId?: number, senderTab?: Tabs.Tab): Promise<TrailSnapshot>;
-  jumpTo(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<WayfindActionResult>;
-  openEntryInNewTab(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<WayfindActionResult>;
-  openEntryInNewWindow(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<WayfindActionResult>;
-  setOverlayOpen(senderTab: Tabs.Tab | undefined, open: boolean): WayfindActionResult;
-  markContentScriptReady(tab?: Tabs.Tab): WayfindActionResult;
-  refreshExtension(): Promise<WayfindActionResult>;
+  toggleOverlay(senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
+  jumpTo(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
+  openEntryInNewTab(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
+  openEntryInNewWindow(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
+  setOverlayOpen(senderTab: Tabs.Tab | undefined, open: boolean): TabTrailActionResult;
+  refreshExtension(): Promise<TabTrailActionResult>;
   activateExistingContentScripts(): Promise<void>;
   registerLifecycleListeners(): void;
 }
@@ -59,28 +58,6 @@ function normalizePageUrl(url: string | undefined): string | null {
     return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
   } catch (_) {
     return null;
-  }
-}
-
-const KNOWN_BROWSER_STORE_RESTRICTED_HOSTS = new Set([
-  "addons.mozilla.org",
-  "chromewebstore.google.com",
-]);
-
-function normalizeHostname(hostname: string): string {
-  return hostname.toLowerCase().replace(/^www\./, "");
-}
-
-function isKnownBrowserStoreRestrictedUrl(url: string | undefined): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    const hostname = normalizeHostname(parsed.hostname);
-    if (KNOWN_BROWSER_STORE_RESTRICTED_HOSTS.has(hostname)) return true;
-    return hostname === "chrome.google.com" && parsed.pathname.toLowerCase().startsWith("/webstore");
-  } catch (_) {
-    return false;
   }
 }
 
@@ -288,7 +265,7 @@ export function createTrailDomain(): TrailDomain {
     return active?.id ?? null;
   }
 
-  async function toggleOverlay(senderTab?: Tabs.Tab): Promise<WayfindActionResult> {
+  async function toggleOverlay(senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
     await ensureLoaded();
     const tabId = await resolveTargetTabId(undefined, senderTab);
     if (tabId == null) return { ok: false, reason: "No tab for overlay" };
@@ -302,14 +279,7 @@ export function createTrailDomain(): TrailDomain {
     return delivered ? { ok: true } : { ok: false, reason: "Overlay unavailable on this page" };
   }
 
-  async function getTrail(tabId?: number, senderTab?: Tabs.Tab): Promise<TrailSnapshot> {
-    await ensureLoaded();
-    const targetTabId = await resolveTargetTabId(tabId, senderTab);
-    if (targetTabId == null) return { ok: false, tabId: null, state: EMPTY_TRAIL_STATE };
-    return { ok: true, tabId: targetTabId, state: getTrailState(targetTabId) };
-  }
-
-  async function jumpTo(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<WayfindActionResult> {
+  async function jumpTo(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
     await ensureLoaded();
     const targetTabId = await resolveTargetTabId(tabId, senderTab);
     if (targetTabId == null) return { ok: false, reason: "No tab to navigate" };
@@ -341,7 +311,7 @@ export function createTrailDomain(): TrailDomain {
     }
   }
 
-  async function openEntryInNewTab(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<WayfindActionResult> {
+  async function openEntryInNewTab(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
     await ensureLoaded();
     const targetTabId = await resolveTargetTabId(tabId, senderTab);
     if (targetTabId == null) return { ok: false, reason: "No source tab" };
@@ -361,7 +331,7 @@ export function createTrailDomain(): TrailDomain {
     }
   }
 
-  async function openEntryInNewWindow(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<WayfindActionResult> {
+  async function openEntryInNewWindow(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
     await ensureLoaded();
     const targetTabId = await resolveTargetTabId(tabId, senderTab);
     if (targetTabId == null) return { ok: false, reason: "No source tab" };
@@ -375,7 +345,7 @@ export function createTrailDomain(): TrailDomain {
     }
   }
 
-  function setOverlayOpen(senderTab: Tabs.Tab | undefined, open: boolean): WayfindActionResult {
+  function setOverlayOpen(senderTab: Tabs.Tab | undefined, open: boolean): TabTrailActionResult {
     const tabId = senderTab?.id;
     if (tabId == null) return { ok: false, reason: "No tab" };
     if (open) overlayOpenTabIds.add(tabId);
@@ -383,11 +353,7 @@ export function createTrailDomain(): TrailDomain {
     return { ok: true };
   }
 
-  function markContentScriptReady(_tab?: Tabs.Tab): WayfindActionResult {
-    return { ok: true };
-  }
-
-  async function refreshExtension(): Promise<WayfindActionResult> {
+  async function refreshExtension(): Promise<TabTrailActionResult> {
     try {
       await activateExistingContentScripts();
       return { ok: true };
@@ -456,12 +422,10 @@ export function createTrailDomain(): TrailDomain {
   return {
     ensureLoaded,
     toggleOverlay,
-    getTrail,
     jumpTo,
     openEntryInNewTab,
     openEntryInNewWindow,
     setOverlayOpen,
-    markContentScriptReady,
     refreshExtension,
     activateExistingContentScripts,
     registerLifecycleListeners,

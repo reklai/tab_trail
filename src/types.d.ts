@@ -7,29 +7,28 @@ declare module "*.css" {
 }
 
 // "super" is the OS/Windows/Command key — it maps to KeyboardEvent.metaKey.
-type WayfindModifierKey = "alt" | "ctrl" | "super";
+type TabTrailModifierKey = "alt" | "ctrl" | "super";
 
 // The toggle trigger is a chord: one modifier (plus optional Shift) combined
 // with either a letter/top-row digit key (matched by event.code) or left,
 // middle, or right click (matched by event.button on mousedown). "kind" picks
 // which half applies.
-interface WayfindTrigger {
-  modifier: WayfindModifierKey;
+interface TabTrailTrigger {
+  modifier: TabTrailModifierKey;
   withShift: boolean;
   kind: "key" | "mouse";
   keyCode: string;
   mouseButton: number;
 }
 
-interface WayfindOverlayPosition {
+interface TabTrailOverlayPosition {
   xPercent: number;
   yPercent: number;
 }
 
-interface WayfindSettings {
-  trigger: WayfindTrigger;
-  showTransitionArrows: boolean;
-  overlayPosition: WayfindOverlayPosition | null;
+interface TabTrailSettings {
+  trigger: TabTrailTrigger;
+  overlayPosition: TabTrailOverlayPosition | null;
   maxVisibleSegments: number;
 }
 
@@ -79,14 +78,7 @@ type TrailJumpPlan =
   | { kind: "historyGo"; delta: number }
   | { kind: "navigate"; url: string };
 
-interface WayfindActionResult {
+interface TabTrailActionResult {
   ok: boolean;
   reason?: string;
-}
-
-// Snapshot returned to the overlay/popup for rendering.
-interface TrailSnapshot {
-  ok: boolean;
-  tabId: number | null;
-  state: TrailState;
 }

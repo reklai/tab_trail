@@ -28,12 +28,6 @@ export function registerRuntimeMessageRouter(
         }
       } catch (error) {
         console.error("[TabTrail] Runtime message handler failed:", error);
-        // The trail is a query, not an action — its callers retry on rejection
-        // (getTrailWithRetry), so rethrow instead of returning a result shape
-        // the popup would misread as a healthy-but-empty trail.
-        if (message.type === "TRAIL_GET") {
-          throw error;
-        }
         return { ok: false, reason: "Internal error" };
       }
     }

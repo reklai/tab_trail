@@ -2,19 +2,19 @@
 
 import browser from "webextension-polyfill";
 import {
-  DEFAULT_WAYFIND_TRIGGER,
-  formatTriggerKeyLabel,
-  formatTriggerMouseLabel,
-  formatWayfindTriggerCombo,
-  isValidTriggerKeyCode,
-  isValidTriggerMouseButton,
-  loadWayfindSettings,
+  DEFAULT_TABTRAIL_TRIGGER,
+  formatTabTrailTriggerCombo,
+  loadTabTrailSettings,
   MAX_VISIBLE_SEGMENTS,
   MIN_VISIBLE_SEGMENTS,
-  saveWayfindSettings,
-} from "../../lib/common/contracts/wayfind";
-import { refreshWayfindExtension } from "../../lib/adapters/runtime/wayfindApi";
-import { populateModifierSelect } from "../../lib/ui/settings/settingsControls";
+  saveTabTrailSettings,
+} from "../../lib/common/contracts/tabtrail";
+import { refreshTabTrailExtension } from "../../lib/adapters/runtime/tabtrailApi";
+import {
+  createShortcutCaptureController,
+  populateModifierSelect,
+} from "../../lib/ui/settings/settingsControls";
+import { isKnownBrowserStoreRestrictedUrl } from "../../lib/common/utils/restrictedUrls";
 
 const EXTENSION_TITLE = "TabTrail";
 
@@ -35,29 +35,6 @@ const PAGE_SHORTCUT_UNAVAILABLE_NOTICE: FallbackNotice = {
   message: "TabTrail cannot reach this tab yet. Refresh the page, then try the shortcut again. You can still use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.",
 };
 
-const BROWSER_STORE_RESTRICTED_HOSTS = new Set([
-  "addons.mozilla.org",
-  "chromewebstore.google.com",
-  "microsoftedge.microsoft.com",
-]);
-
-function normalizeHostname(hostname: string): string {
-  return hostname.toLowerCase().replace(/^www\./, "");
-}
-
-function isKnownBrowserStoreRestrictedUrl(url: string | undefined): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    const hostname = normalizeHostname(parsed.hostname);
-    if (BROWSER_STORE_RESTRICTED_HOSTS.has(hostname)) return true;
-    return hostname === "chrome.google.com" && parsed.pathname.toLowerCase().startsWith("/webstore");
-  } catch (_) {
-    return false;
-  }
-}
-
 function isPageShortcutRestrictedUrl(url: string | undefined): boolean {
   if (!url) return true;
   try {
@@ -77,19 +54,13 @@ async function detectPageShortcutAvailability(): Promise<PageShortcutAvailabilit
   if (isPageShortcutRestrictedUrl(activeTab.url)) return "restricted";
 
   try {
-    const response = await browser.tabs.sendMessage(activeTab.id, { type: "WAYFIND_PING" }, { frameId: 0 });
-    return typeof response === "object" && response !== null && (response as WayfindActionResult).ok === true
+    const response = await browser.tabs.sendMessage(activeTab.id, { type: "TABTRAIL_PING" }, { frameId: 0 });
+    return typeof response === "object" && response !== null && (response as TabTrailActionResult).ok === true
       ? "ready"
       : "unavailable";
   } catch (_) {
     return "unavailable";
   }
-}
-
-function triggerButtonLabel(trigger: WayfindTrigger): string {
-  return trigger.kind === "mouse"
-    ? formatTriggerMouseLabel(trigger.mouseButton)
-    : formatTriggerKeyLabel(trigger.keyCode);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -111,7 +82,7 @@ async function initPopup(): Promise<void> {
   const overlaySummary = document.getElementById("overlaySummary")!;
   const titlebarText = document.getElementById("titlebarText")!;
   const toast = document.getElementById("popupToast")!;
-  const refreshBtn = document.getElementById("refreshWayfindBtn") as HTMLButtonElement;
+  const refreshBtn = document.getElementById("refreshTabTrailBtn") as HTMLButtonElement;
   const modifierSelect = document.getElementById("triggerModifier") as HTMLSelectElement;
   const shiftInput = document.getElementById("triggerWithShift") as HTMLInputElement;
   const captureButton = document.getElementById("triggerCaptureBtn") as HTMLButtonElement;
@@ -122,13 +93,11 @@ async function initPopup(): Promise<void> {
   const closeBtn = document.getElementById("closePopupBtn") as HTMLButtonElement;
 
   const [loadedSettings, initialShortcutAvailability] = await Promise.all([
-    loadWayfindSettings(),
+    loadTabTrailSettings(),
     detectPageShortcutAvailability(),
   ]);
   let settings = loadedSettings;
   let shortcutAvailability = initialShortcutAvailability;
-  let capturing = false;
-  let suppressNextCaptureClick = false;
   let statusTimer = 0;
 
   function clearStatusTimer(): void {
@@ -159,7 +128,7 @@ async function initPopup(): Promise<void> {
     maxVisibleInput.max = String(MAX_VISIBLE_SEGMENTS);
     maxVisibleInput.value = String(settings.maxVisibleSegments);
 
-    const combo = formatWayfindTriggerCombo(settings.trigger);
+    const combo = formatTabTrailTriggerCombo(settings.trigger);
     shortcutLabel.textContent = `Press ${combo} to show your trail`;
     const pageShortcutsReady = shortcutAvailability === "ready";
     fallbackPanel.hidden = pageShortcutsReady;
@@ -179,29 +148,26 @@ async function initPopup(): Promise<void> {
     triggerSummary.textContent = combo;
     overlaySummary.textContent = `${settings.maxVisibleSegments} visible rows`;
 
-    if (!capturing) {
-      captureButton.textContent = triggerButtonLabel(settings.trigger);
-      captureButton.classList.remove("is-capturing");
-    }
+    captureController.showTrigger(settings.trigger);
   }
 
-  async function persistSettings(nextSettings: WayfindSettings, message = "Saved"): Promise<void> {
+  async function persistSettings(nextSettings: TabTrailSettings, message = "Saved"): Promise<void> {
     settings = nextSettings;
-    await saveWayfindSettings(settings);
-    settings = await loadWayfindSettings();
+    await saveTabTrailSettings(settings);
+    settings = await loadTabTrailSettings();
     shortcutAvailability = await detectPageShortcutAvailability();
     renderSettings();
     showStatus(message);
   }
 
-  async function persistTrigger(patch: Partial<WayfindTrigger>): Promise<void> {
+  async function persistTrigger(patch: Partial<TabTrailTrigger>): Promise<void> {
     await persistSettings({ ...settings, trigger: { ...settings.trigger, ...patch } });
   }
 
-  async function refreshWayfind(): Promise<void> {
+  async function refreshTabTrail(): Promise<void> {
     refreshBtn.disabled = true;
     try {
-      const result = await refreshWayfindExtension().catch(() => ({
+      const result = await refreshTabTrailExtension().catch(() => ({
         ok: false,
         reason: "Refresh failed",
       }));
@@ -213,62 +179,12 @@ async function initPopup(): Promise<void> {
     }
   }
 
-  function captureKeydown(event: KeyboardEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.key === "Escape") {
-      stopCapture();
-      return;
-    }
-    if (isValidTriggerKeyCode(event.code)) {
-      stopCapture();
-      void persistTrigger({ kind: "key", keyCode: event.code });
-    }
-  }
-
-  function captureMousedown(event: MouseEvent): void {
-    if (!isValidTriggerMouseButton(event.button)) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    suppressNextCaptureClick = true;
-    window.setTimeout(() => {
-      suppressNextCaptureClick = false;
-    }, 250);
-    stopCapture();
-    void persistTrigger({ kind: "mouse", mouseButton: event.button });
-  }
-
-  function captureContextMenu(event: MouseEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-  }
-
-  function startCapture(): void {
-    if (capturing) return;
-    capturing = true;
-    captureButton.textContent = "Press key / click";
-    captureButton.classList.add("is-capturing");
-    window.setTimeout(() => {
-      if (!capturing) return;
-      window.addEventListener("keydown", captureKeydown, true);
-      window.addEventListener("mousedown", captureMousedown, true);
-      window.addEventListener("contextmenu", captureContextMenu, true);
-    }, 0);
-  }
-
-  function stopCapture(): void {
-    if (!capturing) return;
-    capturing = false;
-    window.removeEventListener("keydown", captureKeydown, true);
-    window.removeEventListener("mousedown", captureMousedown, true);
-    window.removeEventListener("contextmenu", captureContextMenu, true);
-    renderSettings();
-  }
+  const captureController = createShortcutCaptureController(captureButton, (patch) => {
+    void persistTrigger(patch);
+  });
 
   modifierSelect.addEventListener("change", () => {
-    void persistTrigger({ modifier: modifierSelect.value as WayfindModifierKey });
+    void persistTrigger({ modifier: modifierSelect.value as TabTrailModifierKey });
   });
 
   shiftInput.addEventListener("change", () => {
@@ -283,22 +199,12 @@ async function initPopup(): Promise<void> {
     void persistSettings({ ...settings, overlayPosition: null }, "Position reset");
   });
 
-  captureButton.addEventListener("click", (event) => {
-    if (suppressNextCaptureClick) {
-      event.preventDefault();
-      event.stopPropagation();
-      suppressNextCaptureClick = false;
-      return;
-    }
-    startCapture();
-  });
-
   resetShortcutBtn.addEventListener("click", () => {
-    void persistSettings({ ...settings, trigger: { ...DEFAULT_WAYFIND_TRIGGER } }, "Shortcut reset");
+    void persistSettings({ ...settings, trigger: { ...DEFAULT_TABTRAIL_TRIGGER } }, "Shortcut reset");
   });
 
   refreshBtn.addEventListener("click", () => {
-    void refreshWayfind();
+    void refreshTabTrail();
   });
 
   settingsBtn.addEventListener("click", () => {

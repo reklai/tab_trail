@@ -27,26 +27,18 @@ test("background composes the domain, handler, router, and migration at top leve
 test("message handler routes every trail message and falls back to UNHANDLED", () => {
   const source = readSource("src/lib/backgroundRuntime/handlers/trailMessageHandler.ts");
   for (const messageType of [
-    "TRAIL_CONTENT_READY",
-    "TRAIL_GET",
     "TRAIL_TOGGLE_OVERLAY",
     "TRAIL_JUMP",
     "TRAIL_OPEN_IN_NEW_TAB",
     "TRAIL_OPEN_IN_NEW_WINDOW",
     "TRAIL_OVERLAY_STATE",
-    "WAYFIND_OPEN_OPTIONS",
-    "WAYFIND_REFRESH_EXTENSION",
+    "TABTRAIL_OPEN_OPTIONS",
+    "TABTRAIL_REFRESH_EXTENSION",
   ]) {
     assert.match(source, new RegExp(`case "${messageType}"`), `handler must route ${messageType}`);
   }
   assert.match(source, /domain\.refreshExtension\(\)/);
   assert.match(source, /default:\s*\n?\s*return UNHANDLED/);
-});
-
-test("router rethrows on the trail query so its retrying caller is not misled", () => {
-  const source = readSource("src/lib/backgroundRuntime/handlers/runtimeRouter.ts");
-  assert.match(source, /TRAIL_GET/);
-  assert.match(source, /throw error/);
 });
 
 test("domain registers all three webNavigation intakes and serializes per tab", () => {
@@ -74,15 +66,14 @@ test("content script captures both trigger event kinds in capture phase and is r
   assert.match(source, /addEventListener\("mousedown", mousedownHandler, true\)/);
   assert.match(source, /addEventListener\("contextmenu", mouseFollowUpHandler, true\)/);
   assert.match(source, /matchesToggleTrigger/);
-  assert.match(source, /window\.__wayfindCleanup/);
-  assert.match(source, /announceTrailContentReady/);
-  assert.match(source, /openWayfindOptions/);
+  assert.match(source, /window\.__tabtrailCleanup/);
+  assert.match(source, /openTabTrailOptions/);
   assert.match(source, /onOpenOptions:\s*\(\)\s*=>/);
   assert.match(source, /HISTORY_GO/);
 });
 
 test("trigger contract accepts left, middle, and right mouse buttons only", () => {
-  const source = readSource("src/lib/common/contracts/wayfind.ts");
+  const source = readSource("src/lib/common/contracts/tabtrail.ts");
   assert.match(source, /TRIGGER_MOUSE_BUTTONS[^\n=]*=\s*\[0,\s*1,\s*2\]/);
   assert.match(source, /button === 0[\s\S]*Left Click/);
   assert.match(source, /button === 1[\s\S]*Middle Click/);
@@ -94,7 +85,7 @@ test("toolbar popup exposes shortcut and overlay settings without trail renderin
   const html = readSource("src/entryPoints/toolbarPopup/toolbarPopup.html");
   const source = readSource("src/entryPoints/toolbarPopup/toolbarPopup.ts");
   const css = readSource("src/entryPoints/toolbarPopup/toolbarPopup.css");
-  const contract = readSource("src/lib/common/contracts/wayfind.ts");
+  const contract = readSource("src/lib/common/contracts/tabtrail.ts");
   assert.match(html, /class="tabwheel-popup"/);
   assert.match(html, /id="triggerModifier"/);
   assert.match(html, /id="triggerWithShift"/);
@@ -105,7 +96,7 @@ test("toolbar popup exposes shortcut and overlay settings without trail renderin
   assert.match(html, /id="resetPositionBtn"/);
   assert.match(html, /id="resetShortcutBtn" class="overlay-action"/);
   assert.match(html, /id="resetPositionBtn" class="overlay-action"/);
-  assert.match(html, /id="refreshWayfindBtn"/);
+  assert.match(html, /id="refreshTabTrailBtn"/);
   assert.match(html, /id="settingsBtn"/);
   assert.match(html, /id="fallbackPanel"/);
   assert.match(html, /Browser-Restricted Page/);
@@ -121,21 +112,21 @@ test("toolbar popup exposes shortcut and overlay settings without trail renderin
   assert.match(html, /Overlay position/);
   assert.doesNotMatch(html, />TabTrail Trigger<|>Wayfind Trigger<|>Trigger</);
   assert.doesNotMatch(html, /showTransitionArrows|Path color hints|Reset Defaults|resetDefaultsBtn/);
-  assert.match(source, /DEFAULT_WAYFIND_TRIGGER/);
+  assert.match(source, /DEFAULT_TABTRAIL_TRIGGER/);
   assert.match(source, /MIN_VISIBLE_SEGMENTS/);
   assert.match(source, /MAX_VISIBLE_SEGMENTS/);
   assert.match(source, /Keyboard shortcut active/);
   assert.match(source, /function detectPageShortcutAvailability/);
-  assert.match(source, /refreshWayfindExtension/);
-  assert.match(source, /function refreshWayfind/);
-  assert.match(source, /WAYFIND_PING/);
+  assert.match(source, /refreshTabTrailExtension/);
+  assert.match(source, /function refreshTabTrail/);
+  assert.match(source, /TABTRAIL_PING/);
   assert.match(source, /fallbackPanel\.hidden = pageShortcutsReady/);
   assert.match(source, /shortcutStatus\.hidden = !pageShortcutsReady/);
   assert.match(source, /Page Shortcut Not Ready/);
   assert.match(source, /maxVisibleSegments:\s*Number\(maxVisibleInput\.value\)/);
   assert.match(source, /overlayPosition:\s*null/);
-  assert.match(source, /trigger:\s*\{\s*...DEFAULT_WAYFIND_TRIGGER\s*\}/);
-  assert.doesNotMatch(source, /DEFAULT_WAYFIND_SETTINGS|arrowsInput|resetDefaults|resetDefaultsBtn|showTransitionArrows:\s*arrowsInput\.checked/);
+  assert.match(source, /trigger:\s*\{\s*...DEFAULT_TABTRAIL_TRIGGER\s*\}/);
+  assert.doesNotMatch(source, /DEFAULT_TABTRAIL_SETTINGS|arrowsInput|resetDefaults|resetDefaultsBtn|showTransitionArrows:\s*arrowsInput\.checked/);
   assert.match(css, /\.fallback-panel/);
   assert.match(css, /\.number-control/);
   assert.match(css, /\.section-actions/);
@@ -165,9 +156,9 @@ test("options page presents shortcut wording and reset controls", () => {
   assert.doesNotMatch(html, /Toggle trigger|Current trigger|Transition connectors/);
   assert.match(source, /shortcutLabel\.textContent = `Press \$\{combo\} to show your trail`/);
   assert.match(source, /resetShortcutBtn/);
-  assert.match(source, /refreshWayfindExtension/);
-  assert.match(source, /function refreshWayfind/);
-  assert.match(source, /trigger:\s*\{\s*...DEFAULT_WAYFIND_TRIGGER\s*\}/);
+  assert.match(source, /refreshTabTrailExtension/);
+  assert.match(source, /function refreshTabTrail/);
+  assert.match(source, /trigger:\s*\{\s*...DEFAULT_TABTRAIL_TRIGGER\s*\}/);
   assert.doesNotMatch(source, /shortcutStatus|resetBtn|showTransitionArrows|Keyboard shortcut active on normal web pages/);
 });
 
@@ -241,19 +232,17 @@ test("trigger matcher rejects auto-repeat and untrusted events", () => {
 test("runtime message contract declares all message literals", () => {
   const source = readSource("src/lib/common/contracts/runtimeMessages.ts");
   for (const messageType of [
-    "WAYFIND_PING",
+    "TABTRAIL_PING",
     "TRAIL_SHOW",
     "TRAIL_UPDATED",
     "HISTORY_GO",
-    "TRAIL_CONTENT_READY",
-    "TRAIL_GET",
     "TRAIL_TOGGLE_OVERLAY",
     "TRAIL_JUMP",
     "TRAIL_OPEN_IN_NEW_TAB",
     "TRAIL_OPEN_IN_NEW_WINDOW",
     "TRAIL_OVERLAY_STATE",
-    "WAYFIND_OPEN_OPTIONS",
-    "WAYFIND_REFRESH_EXTENSION",
+    "TABTRAIL_OPEN_OPTIONS",
+    "TABTRAIL_REFRESH_EXTENSION",
   ]) {
     assert.match(source, new RegExp(messageType), `contract must declare ${messageType}`);
   }

@@ -1,25 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { transform } from "esbuild";
-
-const ROOT = process.cwd();
+import { loadTsModule } from "./helpers/loadTsModule.mjs";
 
 let corePromise = null;
 
 function loadTrailCoreModule() {
   if (!corePromise) {
-    corePromise = (async () => {
-      const source = readFileSync(resolve(ROOT, "src/lib/core/trail/trailCore.ts"), "utf8");
-      const transformed = await transform(source, {
-        loader: "ts",
-        format: "esm",
-        target: "es2022",
-      });
-      const encoded = Buffer.from(transformed.code, "utf8").toString("base64");
-      return import(`data:text/javascript;base64,${encoded}`);
-    })();
+    corePromise = loadTsModule("src/lib/core/trail/trailCore.ts");
   }
   return corePromise;
 }

@@ -3,11 +3,12 @@
 // snapshot, and stamps the current version. Each step reports whether it
 // changed anything so the runtime can skip writes when nothing moved.
 //
-// The schema starts at v1; the only step so far is stamping the version onto a
-// fresh or legacy profile. Future migrations chain below as new `if` blocks.
+// v1 stamps the version onto a fresh or legacy profile; v2 renames the
+// Wayfind->TabTrail storage keys. Future migrations chain below as new
+// `if (fromVersion < N)` blocks.
 
 export const STORAGE_SCHEMA_VERSION_KEY = "storageSchemaVersion";
-export const STORAGE_SCHEMA_VERSION = 1;
+export const STORAGE_SCHEMA_VERSION = 2;
 
 type StorageSnapshot = Record<string, unknown>;
 
@@ -38,6 +39,27 @@ export function createCurrentVersionMigrationResult(): StorageMigrationResult {
   };
 }
 
+// v1->v2: the extension was renamed from "Wayfind" to "TabTrail". Carry the
+// saved settings over to the new key and drop any stale wayfind* keys (the
+// local-storage fallback copies of per-tab session trails). The old literals
+// are hardcoded on purpose — a migration must reference the values a legacy
+// build actually wrote, never the renamed constants.
+function renameWayfindKeys(storage: StorageSnapshot): boolean {
+  let changed = false;
+  if ("wayfindSettings" in storage) {
+    storage["tabtrailSettings"] = storage["wayfindSettings"];
+    delete storage["wayfindSettings"];
+    changed = true;
+  }
+  for (const key of Object.keys(storage)) {
+    if (key.startsWith("wayfindTrail:")) {
+      delete storage[key];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export function migrateStorageSnapshot(input: StorageSnapshot): StorageMigrationResult {
   const migratedStorage: StorageSnapshot = { ...input };
   const fromVersion = readSchemaVersion(input);
@@ -54,8 +76,9 @@ export function migrateStorageSnapshot(input: StorageSnapshot): StorageMigration
 
   let changed = false;
 
-  // Future schema steps go here, e.g.:
-  //   if (fromVersion < 2) { changed = migrateSomething(migratedStorage) || changed; }
+  if (fromVersion < 2) {
+    changed = renameWayfindKeys(migratedStorage) || changed;
+  }
 
   if (migratedStorage[STORAGE_SCHEMA_VERSION_KEY] !== STORAGE_SCHEMA_VERSION) {
     migratedStorage[STORAGE_SCHEMA_VERSION_KEY] = STORAGE_SCHEMA_VERSION;
