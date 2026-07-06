@@ -1,5 +1,6 @@
-// Shadow DOM panel host — creates an isolated overlay container with focus
-// trapping so keyboard input stays inside the panel instead of the address bar.
+// Shadow DOM panel host — creates an isolated overlay container so panel
+// markup and styles stay separate from the page. Panels are non-modal: the
+// page keeps focus except while an explicit panel control is being used.
 
 import browser from "webextension-polyfill";
 
@@ -83,67 +84,10 @@ export function createPanelHost(): PanelHost {
 
   const host = document.createElement("div");
   host.id = "ht-panel-host";
-  host.tabIndex = -1;
   host.style.cssText =
     "position:fixed;inset:0;z-index:2147483647;pointer-events:auto;overscroll-behavior:contain;isolation:isolate;";
   const shadow = host.attachShadow({ mode: "open" });
   document.body.appendChild(host);
-
-  let lastFocusedInPanel: HTMLElement | null = null;
-  let pointerInteractionInPanel = false;
-  shadow.addEventListener("focusin", (event: Event) => {
-    const target = event.target;
-    if (target instanceof HTMLElement) {
-      lastFocusedInPanel = target;
-    }
-  });
-  shadow.addEventListener("pointerdown", () => {
-    pointerInteractionInPanel = true;
-  });
-  const onGlobalPointerEnd = (): void => {
-    pointerInteractionInPanel = false;
-  };
-  window.addEventListener("pointerup", onGlobalPointerEnd, true);
-  window.addEventListener("pointercancel", onGlobalPointerEnd, true);
-
-  const focusPreferredPanelTarget = (): void => {
-    if (!document.getElementById("ht-panel-host")) return;
-    if (lastFocusedInPanel && shadow.contains(lastFocusedInPanel)) {
-      lastFocusedInPanel.focus({ preventScroll: true });
-      return;
-    }
-    host.focus({ preventScroll: true });
-  };
-
-  // Reclaim focus when it escapes the panel (e.g. to the browser UI).
-  // Must check both host.contains() and shadowRoot.contains() because
-  // Shadow DOM children aren't found by host.contains().
-  let reclaimId = 0;
-  host.addEventListener("focusout", () => {
-    cancelAnimationFrame(reclaimId);
-    reclaimId = requestAnimationFrame(() => {
-      if (document.visibilityState !== "visible") return;
-      if (pointerInteractionInPanel) return;
-      if (!document.getElementById("ht-panel-host")) return;
-
-      const activeInHostTree = document.activeElement === host || host.contains(document.activeElement);
-      const activeInShadow = !!shadow.activeElement && shadow.contains(shadow.activeElement as Node);
-      if (!activeInHostTree && !activeInShadow) {
-        focusPreferredPanelTarget();
-      }
-    });
-  });
-
-  const onVisibilityChange = (): void => {
-    if (document.visibilityState !== "visible") return;
-    if (!document.getElementById("ht-panel-host")) return;
-    const activeInHostTree = document.activeElement === host || host.contains(document.activeElement);
-    const activeInShadow = !!shadow.activeElement && shadow.contains(shadow.activeElement as Node);
-    if (!activeInHostTree && !activeInShadow) {
-      focusPreferredPanelTarget();
-    }
-  };
-  document.addEventListener("visibilitychange", onVisibilityChange);
 
   const onError = (event: ErrorEvent): void => {
     if (!isPanelRuntimeFaultFromExtension(event)) return;
@@ -178,9 +122,6 @@ export function createPanelHost(): PanelHost {
   activePanelFailSafeCleanup = () => {
     window.removeEventListener("error", onError);
     window.removeEventListener("unhandledrejection", onUnhandledRejection);
-    window.removeEventListener("pointerup", onGlobalPointerEnd, true);
-    window.removeEventListener("pointercancel", onGlobalPointerEnd, true);
-    document.removeEventListener("visibilitychange", onVisibilityChange);
     cancelAnimationFrame(frameProbeId);
     window.clearInterval(watchdogIntervalId);
   };

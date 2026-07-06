@@ -100,6 +100,15 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
     if (event.key !== "Escape" || !session) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    // Dismiss the innermost open surface first; only a bare Escape hides the bar.
+    if (menuElement) {
+      closeEntryMenu();
+      return;
+    }
+    if (previewElement) {
+      closeEntryPreview();
+      return;
+    }
     hideBreadcrumbTrail();
   };
   document.addEventListener("keydown", onDocumentKeydown, true);
@@ -328,7 +337,8 @@ function buildBranchRow(
   content.appendChild(url);
 
   row.appendChild(content);
-  row.appendChild(buildRowMoreButton(row, index, entry, callbacks));
+  const more = buildRowMoreButton(row, index, entry, callbacks);
+  row.appendChild(more);
 
   row.addEventListener("click", (event) => {
     event.preventDefault();
@@ -337,7 +347,9 @@ function buildBranchRow(
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    openEntryMenu(row, index, entry, callbacks);
+    // The ⋯ button is the menu trigger even for right-click opens, so a
+    // pointerdown on it never counts as "outside" and the toggle can close.
+    openEntryMenu(row, index, entry, callbacks, more);
   });
   return row;
 }
@@ -646,7 +658,7 @@ function openEntryMenu(
   index: number,
   entry: TrailEntry,
   callbacks: BreadcrumbTrailCallbacks,
-  trigger?: HTMLElement,
+  trigger: HTMLElement,
 ): void {
   if (!session) return;
   closeEntryMenu();
@@ -698,7 +710,7 @@ function openEntryMenu(
   positionPopover(menu, anchor);
   menuElement = menu;
   menuAnchorElement = anchor;
-  menuTriggerElement = trigger ?? null;
+  menuTriggerElement = trigger;
 
   const onOutsidePointer = (event: Event): void => {
     const path = event.composedPath();

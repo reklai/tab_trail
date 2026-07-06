@@ -197,8 +197,12 @@ test("branch overlay context menu order and callbacks match the trail actions", 
     /if \(menuElement && menuAnchorElement === anchor && menuTriggerElement === trigger\)/,
   );
   assert.match(source, /menuAnchorElement = anchor/);
-  assert.match(source, /menuTriggerElement = trigger \?\? null/);
+  assert.match(source, /menuTriggerElement = trigger/);
+  assert.doesNotMatch(source, /trigger\?:|trigger \?\? null/);
+  assert.match(source, /openEntryMenu\(row,\s*index,\s*entry,\s*callbacks,\s*more\)/);
   assert.match(source, /path\.includes\(menuTriggerElement\)/);
+  assert.match(source, /if \(menuElement\) \{\s*closeEntryMenu\(\);\s*return;/);
+  assert.match(source, /if \(previewElement\) \{\s*closeEntryPreview\(\);\s*return;/);
   assert.match(source, /const budget\s*=\s*Math\.min\(Math\.max\(1,\s*maxVisible\),\s*total\)/);
   assert.match(source, /addIndex\(total - 1\)/);
   assert.match(source, /selected\.size < budget/);
@@ -208,7 +212,7 @@ test("branch overlay context menu order and callbacks match the trail actions", 
   assert.match(source, /className\s*=\s*"wf-branch-entry-title"/);
   assert.match(source, /className\s*=\s*"wf-branch-entry-url"/);
   assert.match(source, /function entryUrlSubtitle/);
-  assert.doesNotMatch(source, /function scheduleTooltip|rowNeedsTooltip|mouseenter|mouseleave|wf-tooltip/);
+  assert.doesNotMatch(source, /function scheduleTooltip|rowNeedsTooltip|wf-tooltip/);
   assert.match(source, /function openEntryPreview/);
   assert.match(source, /function positionPreviewPane/);
   assert.match(source, /session\.bar\.getBoundingClientRect\(\)/);
@@ -233,7 +237,6 @@ test("branch overlay context menu order and callbacks match the trail actions", 
   assert.match(source, /className\s*=\s*"wf-menu-detail-time"/);
   assert.doesNotMatch(source, /buildMenuSectionLabel|wf-menu-section-label/);
   assert.match(source, /Visited \$\{formatTrailTimestamp\(entry\.timestamp,\s*Date\.now\(\)\)\}/);
-  assert.match(source, /formatTrailTimestamp\(entry\.timestamp,\s*Date\.now\(\)\)/);
   assert.match(
     source,
     /label:\s*"Preview"[\s\S]*label:\s*"Open in new tab"[\s\S]*label:\s*"Open in new window"[\s\S]*label:\s*"Copy URL"/,
@@ -242,6 +245,15 @@ test("branch overlay context menu order and callbacks match the trail actions", 
   assert.doesNotMatch(source, /onPreview\(|--wf-depth|MAX_BRANCH_DEPTH/);
   assert.doesNotMatch(source, /wf-branch-label/);
   assert.doesNotMatch(source, /Copy as Markdown/);
+});
+
+test("panel host stays non-modal and never reclaims focus from the page", () => {
+  const source = readSource("src/lib/common/utils/panelHost.ts");
+  assert.doesNotMatch(
+    source,
+    /lastFocusedInPanel|focusPreferredPanelTarget|pointerInteractionInPanel|host\.tabIndex/,
+  );
+  assert.doesNotMatch(source, /addEventListener\("focus|addEventListener\("visibilitychange/);
 });
 
 test("trigger matcher rejects auto-repeat and untrusted events", () => {

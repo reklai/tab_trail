@@ -1,15 +1,5 @@
 // Shared utility functions used across content script modules.
 
-/** HTML-escape a string to prevent XSS in innerHTML assignments */
-const HTML_ESCAPE: Record<string, string> = {
-  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-};
-const HTML_ESCAPE_RE = /[&<>"']/;
-export function escapeHtml(text: string): string {
-  if (!HTML_ESCAPE_RE.test(text)) return text;
-  return text.replace(/[&<>"']/g, (character) => HTML_ESCAPE[character]);
-}
-
 /** Extract hostname from a URL, with fallback to truncated string */
 const DOMAIN_CACHE_MAX = 500;
 const domainCache = new Map<string, string>();
