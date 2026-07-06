@@ -1,4 +1,4 @@
-// Browser-action popup for Wayfind trigger controls.
+// Browser-action popup for TabTrail trigger controls.
 
 import browser from "webextension-polyfill";
 import {
@@ -16,7 +16,7 @@ import {
 import { refreshWayfindExtension } from "../../lib/adapters/runtime/wayfindApi";
 import { populateModifierSelect } from "../../lib/ui/settings/settingsControls";
 
-const EXTENSION_TITLE = "Wayfind";
+const EXTENSION_TITLE = "TabTrail";
 
 type PageShortcutAvailability = "ready" | "restricted" | "unavailable";
 
@@ -27,12 +27,12 @@ interface FallbackNotice {
 
 const BROWSER_RESTRICTED_NOTICE: FallbackNotice = {
   title: "Browser-Restricted Page",
-  message: "The browser does not allow extension scripts on restricted pages. Wayfind cannot listen for keyboard or mouse shortcuts or show the in-page trail here. Use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.",
+  message: "The browser does not allow extension scripts on restricted pages. TabTrail cannot listen for keyboard or mouse shortcuts or show the in-page trail here. Use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.",
 };
 
 const PAGE_SHORTCUT_UNAVAILABLE_NOTICE: FallbackNotice = {
   title: "Page Shortcut Not Ready",
-  message: "Wayfind cannot reach this tab yet. Refresh the page, then try the shortcut again. You can still use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.",
+  message: "TabTrail cannot reach this tab yet. Refresh the page, then try the shortcut again. You can still use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.",
 };
 
 const BROWSER_STORE_RESTRICTED_HOSTS = new Set([
@@ -96,7 +96,7 @@ document.addEventListener("DOMContentLoaded", () => {
   void initPopup().catch(() => {
     const toast = document.getElementById("popupToast");
     if (!toast) return;
-    toast.textContent = "Wayfind popup failed to initialize.";
+    toast.textContent = "TabTrail popup failed to initialize.";
     toast.classList.add("is-visible");
   });
 });

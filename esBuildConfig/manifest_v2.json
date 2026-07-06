@@ -1,11 +1,11 @@
 {
   "manifest_version": 2,
-  "name": "Wayfind",
+  "name": "TabTrail - Current Tab History",
   "version": "1.0.0",
-  "description": "Press Alt+H to see where this tab came from. Retrace your browsing path and click any breadcrumb to jump back instantly.",
+  "description": "Press Alt+H to show this tab's page trail and jump back to any visited step without pressing Back over and over.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "@wayfind.reklai",
+      "id": "@tabtrail.reklai",
       "data_collection_permissions": {
         "required": ["none"]
       }
@@ -36,14 +36,18 @@
   },
   "browser_action": {
     "default_icon": {
+      "32": "icons/icon-32.png",
       "48": "icons/icon-48.png",
+      "64": "icons/icon-64.png",
       "96": "icons/icon-96.png"
     },
     "default_popup": "toolbarPopup/toolbarPopup.html",
-    "default_title": "Wayfind"
+    "default_title": "TabTrail"
   },
   "icons": {
+    "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
+    "64": "icons/icon-64.png",
     "96": "icons/icon-96.png",
     "128": "icons/icon-128.png"
   }

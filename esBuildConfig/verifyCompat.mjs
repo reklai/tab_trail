@@ -13,6 +13,16 @@ function fileExists(pathFromRoot) {
   return existsSync(resolve(root, pathFromRoot));
 }
 
+function pngDimensions(pathFromRoot) {
+  const buffer = readFileSync(resolve(root, pathFromRoot));
+  const signature = buffer.subarray(0, 8).toString("hex");
+  if (signature !== "89504e470d0a1a0a") return null;
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
+}
+
 function hasAll(actual, required) {
   return required.every((item) => actual.includes(item));
 }
@@ -90,7 +100,7 @@ if (suggestedCount !== 0) {
 }
 
 if (manifestV2.commands || manifestV3.commands) {
-  errors.push("Wayfind manifests must not declare commands; the toggle is captured in the content script.");
+  errors.push("TabTrail manifests must not declare commands; the toggle is captured in the content script.");
 }
 
 if (manifestV2.options_ui?.page !== "optionsPage/optionsPage.html") {
@@ -127,12 +137,27 @@ for (const [name, manifest] of [
   ["MV3", manifestV3],
 ]) {
   const icons = manifest.icons || {};
-  for (const size of ["48", "96", "128"]) {
+  for (const size of ["32", "48", "64", "96", "128"]) {
     if (!icons[size]) {
       errors.push(`${name} icons must include size ${size}.`);
     }
   }
 }
+
+const requiredPngSizes = {
+  "src/icons/icon-32.png": 32,
+  "src/icons/icon-48.png": 48,
+  "src/icons/icon-64.png": 64,
+  "src/icons/icon-96.png": 96,
+  "src/icons/icon-128.png": 128,
+};
+
+const requiredPngDimensions = {
+  ...Object.fromEntries(Object.entries(requiredPngSizes).map(([file, size]) => [file, [size, size]])),
+  "src/icons/icon-1024.png": [1024, 1024],
+  "src/icons/promo-440x280.png": [440, 280],
+  "src/icons/marquee-1400x560.png": [1400, 560],
+};
 
 const requiredSourceFiles = [
   "src/entryPoints/contentScript/contentScript.ts",
@@ -143,13 +168,26 @@ const requiredSourceFiles = [
   "src/entryPoints/toolbarPopup/toolbarPopup.css",
   "src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.ts",
   "src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.css",
+  "src/icons/icon-32.png",
   "src/icons/icon-48.png",
+  "src/icons/icon-64.png",
   "src/icons/icon-96.png",
   "src/icons/icon-128.png",
+  "src/icons/icon-1024.png",
+  "src/icons/promo-440x280.png",
+  "src/icons/marquee-1400x560.png",
 ];
 for (const requiredFile of requiredSourceFiles) {
   if (!fileExists(requiredFile)) {
     errors.push(`Missing required source asset: ${requiredFile}`);
+  }
+}
+
+for (const [pngPath, [expectedWidth, expectedHeight]] of Object.entries(requiredPngDimensions)) {
+  if (!fileExists(pngPath)) continue;
+  const dimensions = pngDimensions(pngPath);
+  if (!dimensions || dimensions.width !== expectedWidth || dimensions.height !== expectedHeight) {
+    errors.push(`${pngPath} must be a ${expectedWidth}x${expectedHeight} PNG.`);
   }
 }
 

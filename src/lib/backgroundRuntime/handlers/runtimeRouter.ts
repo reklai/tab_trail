@@ -27,7 +27,7 @@ export function registerRuntimeMessageRouter(
           return result;
         }
       } catch (error) {
-        console.error("[Wayfind] Runtime message handler failed:", error);
+        console.error("[TabTrail] Runtime message handler failed:", error);
         // The trail is a query, not an action — its callers retry on rejection
         // (getTrailWithRetry), so rethrow instead of returning a result shape
         // the popup would misread as a healthy-but-empty trail.

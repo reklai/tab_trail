@@ -38,5 +38,6 @@ test("docs carry no leftover branding from earlier concepts", () => {
     const text = readText(doc);
     assert.doesNotMatch(text, /TabWheel/, `${doc} should not mention TabWheel`);
     assert.doesNotMatch(text, /Scratchpad/i, `${doc} should not mention the scratchpad concept`);
+    assert.doesNotMatch(text, /Wayfind/, `${doc} should not expose the old public brand`);
   }
 });

@@ -1,51 +1,55 @@
-# Wayfind — Store Listing
+# TabTrail - Store Listing
 
 ## Extension Names
-- Firefox / Zen: Wayfind
-- Chrome: Wayfind
+- Firefox / Zen: TabTrail - Current Tab History
+- Chrome: TabTrail - Current Tab History
+- In-app name: TabTrail
 
-Chrome Web Store listing title: **Wayfind - Where Did This Tab Come From**
+Chrome Web Store listing title: **TabTrail - Current Tab History**
 
-## Summary (short, <=132 chars)
-Press Alt+H to see where this tab came from. Retrace your browsing path and click to jump back instantly.
+## Chrome Summary (short, <=132 chars)
+Press Alt+H to show this tab's page trail and jump back to any visited step without pressing Back over and over.
+
+## Firefox Summary (<=250 chars)
+Press Alt+H to show this tab's page trail, preview visited pages, and jump back to the right step without pressing Back over and over.
 
 ## Description
-Wayfind automatically tracks every page you visit within a tab, building a
-clickable branch trail. Press Alt + H to see exactly where this tab came
-from and jump back to any point.
+TabTrail shows a clean page trail for the current tab, so you can see where you
+came from and jump back to the right step without repeatedly pressing Back.
 
-- Automatic tracking — every link click is recorded. Works on single-page apps
-  (pushState) and hash routers too.
-- Toggleable overlay — Alt + H to show, Alt + H (or Esc) to hide. Zero screen
-  space when idle.
-- Click to retrace — any branch row navigates the tab back to that
-  page, preserving scroll position where the browser allows it.
-- Drag to reposition — move the bar by its handle; it remembers its spot.
-- Right-click a row — open an in-page preview pane, open in a new tab, open in a new window, or copy the URL.
-- Fully configurable shortcut — Alt, Ctrl, or Super plus a letter/top-row digit
-  key or left, middle, or right click, with optional Shift.
-- Session-only by design — trails live in session storage and clear when the
-  browser closes. Titles and URLs only: no page content, no screenshots.
+Use it when you are deep in docs, search results, product pages, dashboards,
+GitHub issues, or research links and need to recover your place quickly.
+
+- View the page trail for the current tab.
+- Open the trail with a keyboard or mouse shortcut.
+- Preview visited pages from the trail.
+- Jump back to any trail entry.
+- Open entries in a new tab or window.
+- Copy any trail URL.
+- Keep trails session-only; they clear when the browser closes.
+
+TabTrail is focused on in-tab navigation history. It is not a full tab manager,
+session restore tool, bookmark manager, or closed-tab recovery extension.
 
 No data leaves your browser. Works on Firefox, Chrome, and Zen Browser.
 
-We use the `webNavigation` API to record page titles and URLs only — no content
+We use the `webNavigation` API to record page titles and URLs only: no content
 is read, nothing is transmitted, and there are no analytics. On browser pages
-(`about:`, `chrome://`) where extension content scripts cannot run, the
-shortcut is unavailable; the toolbar popup still lets you adjust the shortcut and
-open settings.
+(`about:`, `chrome://`) where extension content scripts cannot run, the shortcut
+and in-page trail are unavailable; the toolbar popup still lets you adjust the
+shortcut and open settings.
 
 ## Permissions
-- `webNavigation` — observe when the tab commits a navigation (including SPA
+- `webNavigation` - observe when the tab commits a navigation (including SPA
   pushState and hash changes) to build the trail. Titles and URLs only.
-- `tabs` — read tab titles/favicons for trail entries and navigate the tab when
-  you click a branch row.
-- `storage` — save your settings locally and mirror trails in session storage
+- `tabs` - read tab titles/favicons for trail entries and navigate the tab when
+  you click a trail row.
+- `storage` - save your settings locally and mirror trails in session storage
   (cleared when the browser closes).
-- `scripting` — (Chrome) re-inject the content script into open tabs after
+- `scripting` - (Chrome) re-inject the content script into open tabs after
   install/update so the shortcut works without reloading pages.
-- `<all_urls>` — run the content script that captures configurable shortcuts and
-  renders the branch overlay on every page.
+- `<all_urls>` - run the content script that captures configurable shortcuts and
+  renders the trail overlay on every page.
 
 ## Compatibility
 Works on Firefox, Chrome, and Zen Browser.

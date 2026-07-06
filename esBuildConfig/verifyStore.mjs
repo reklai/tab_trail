@@ -21,8 +21,22 @@ const manifestV3 = readJson("esBuildConfig/manifest_v3.json");
 const store = readText("STORE.md");
 const privacy = readText("PRIVACY.md");
 
+const CHROME_NAME_LIMIT = 75;
+const FIREFOX_NAME_LIMIT = 50;
+const CHROME_SUMMARY_LIMIT = 132;
+const FIREFOX_SUMMARY_LIMIT = 250;
+
 if (manifestV2.description !== manifestV3.description) {
   errors.push("Manifest descriptions must match between MV2 and MV3.");
+}
+if (manifestV2.name.length > FIREFOX_NAME_LIMIT) {
+  errors.push(`Firefox manifest name must be <=${FIREFOX_NAME_LIMIT} chars (found ${manifestV2.name.length}).`);
+}
+if (manifestV3.name.length > CHROME_NAME_LIMIT) {
+  errors.push(`Chrome manifest name must be <=${CHROME_NAME_LIMIT} chars (found ${manifestV3.name.length}).`);
+}
+if (manifestV3.description.length > CHROME_SUMMARY_LIMIT) {
+  errors.push(`Chrome manifest description must be <=${CHROME_SUMMARY_LIMIT} chars (found ${manifestV3.description.length}).`);
 }
 
 const extensionNamesMatch = store.match(/## Extension Names\s+([\s\S]*?)\n## /);
@@ -41,18 +55,35 @@ if (!extensionNamesMatch) {
   }
 }
 
-const summaryMatch = store.match(/## Summary \(short[^\n]*\)\s+([\s\S]*?)\n## /);
-if (!summaryMatch) {
-  errors.push("STORE.md must include the short summary section.");
+const chromeSummaryMatch = store.match(/## Chrome Summary[^\n]*\s+([\s\S]*?)\n## /);
+if (!chromeSummaryMatch) {
+  errors.push("STORE.md must include the Chrome summary section.");
 } else {
-  const summaryLine = summaryMatch[1]
+  const summaryLine = chromeSummaryMatch[1]
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find(Boolean);
   if (!summaryLine) {
-    errors.push("STORE.md short summary cannot be empty.");
-  } else if (summaryLine.length > 132) {
-    errors.push(`STORE.md short summary must be <=132 chars (found ${summaryLine.length}).`);
+    errors.push("STORE.md Chrome summary cannot be empty.");
+  } else if (summaryLine.length > CHROME_SUMMARY_LIMIT) {
+    errors.push(`STORE.md Chrome summary must be <=${CHROME_SUMMARY_LIMIT} chars (found ${summaryLine.length}).`);
+  } else if (summaryLine !== manifestV3.description) {
+    errors.push("STORE.md Chrome summary must match the manifest description.");
+  }
+}
+
+const firefoxSummaryMatch = store.match(/## Firefox Summary[^\n]*\s+([\s\S]*?)\n## /);
+if (!firefoxSummaryMatch) {
+  errors.push("STORE.md must include the Firefox summary section.");
+} else {
+  const summaryLine = firefoxSummaryMatch[1]
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!summaryLine) {
+    errors.push("STORE.md Firefox summary cannot be empty.");
+  } else if (summaryLine.length > FIREFOX_SUMMARY_LIMIT) {
+    errors.push(`STORE.md Firefox summary must be <=${FIREFOX_SUMMARY_LIMIT} chars (found ${summaryLine.length}).`);
   }
 }
 

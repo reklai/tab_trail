@@ -1,4 +1,4 @@
-// Options page: the full Wayfind settings surface. Every control saves on
+// Options page: the full TabTrail settings surface. Every control saves on
 // change and round-trips through the shared normalizers so stored data stays
 // valid. The shortcut capture button records either a keydown (event.code) or
 // a mousedown (event.button) — whichever the user performs first.

@@ -33,10 +33,12 @@ test("manifests do not declare keyboard commands (toggle is captured in-page)", 
 test("manifests use shared store names and titles", () => {
   const v2 = readJson("esBuildConfig/manifest_v2.json");
   const v3 = readJson("esBuildConfig/manifest_v3.json");
-  assert.equal(v2.name, "Wayfind");
-  assert.equal(v2.browser_action.default_title, "Wayfind");
-  assert.equal(v3.name, "Wayfind");
-  assert.equal(v3.action.default_title, "Wayfind");
+  assert.equal(v2.name, "TabTrail - Current Tab History");
+  assert.equal(v2.browser_action.default_title, "TabTrail");
+  assert.equal(v3.name, "TabTrail - Current Tab History");
+  assert.equal(v3.action.default_title, "TabTrail");
+  assert.equal(v3.description.length <= 132, true);
+  assert.equal(v2.description, v3.description);
 });
 
 test("manifests and package share the same version", () => {
@@ -97,6 +99,7 @@ test("firefox manifest contains AMO gecko metadata", () => {
   const v2 = readJson("esBuildConfig/manifest_v2.json");
   const gecko = v2.browser_specific_settings?.gecko;
   assert.equal(typeof gecko?.id, "string");
+  assert.equal(gecko?.id, "@tabtrail.reklai");
   assert.ok(gecko.id.length > 0);
 
   const required = gecko?.data_collection_permissions?.required;

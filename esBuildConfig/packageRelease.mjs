@@ -52,17 +52,17 @@ function main() {
   mkdirSync(releaseDir, { recursive: true });
 
   run("npm", ["run", "build:firefox"]);
-  zipDirectory(dist, resolve(releaseDir, `wayfind-firefox-v${version}.xpi`));
+  zipDirectory(dist, resolve(releaseDir, `tabtrail-firefox-v${version}.xpi`));
 
   run("npm", ["run", "build:chrome"]);
-  zipDirectory(dist, resolve(releaseDir, `wayfind-chrome-v${version}.zip`));
+  zipDirectory(dist, resolve(releaseDir, `tabtrail-chrome-v${version}.zip`));
 
-  zipSource(resolve(releaseDir, `wayfind-source-v${version}.zip`));
+  zipSource(resolve(releaseDir, `tabtrail-source-v${version}.zip`));
 
   console.log("[release] Done");
-  console.log(`- release/wayfind-firefox-v${version}.xpi`);
-  console.log(`- release/wayfind-chrome-v${version}.zip`);
-  console.log(`- release/wayfind-source-v${version}.zip`);
+  console.log(`- release/tabtrail-firefox-v${version}.xpi`);
+  console.log(`- release/tabtrail-chrome-v${version}.zip`);
+  console.log(`- release/tabtrail-source-v${version}.zip`);
 }
 
 try {

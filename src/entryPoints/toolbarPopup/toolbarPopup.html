@@ -11,7 +11,7 @@
         <button class="dot dot-close" id="closePopupBtn" type="button" title="Close" aria-label="Close popup"></button>
       </div>
       <span class="titlebar-text" id="titlebarText">__EXTENSION_NAME__</span>
-      <button class="titlebar-button" id="refreshWayfindBtn" type="button" title="Refresh Wayfind">Refresh</button>
+      <button class="titlebar-button" id="refreshWayfindBtn" type="button" title="Refresh TabTrail">Refresh</button>
     </div>
 
     <div class="shortcut-panel">
@@ -21,13 +21,13 @@
 
     <section class="fallback-panel" id="fallbackPanel" aria-live="polite" hidden>
       <strong id="fallbackTitle">Browser-Restricted Page</strong>
-      <span id="fallbackMessage">The browser does not allow extension scripts on restricted pages. Wayfind cannot listen for keyboard or mouse shortcuts or show the in-page trail here. Use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.</span>
+      <span id="fallbackMessage">The browser does not allow extension scripts on restricted pages. TabTrail cannot listen for keyboard or mouse shortcuts or show the in-page trail here. Use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.</span>
     </section>
 
     <main class="popup-scroll">
-      <section class="cycle-mode-panel" aria-label="Wayfind shortcut">
+      <section class="cycle-mode-panel" aria-label="TabTrail shortcut">
         <div class="mode-heading">
-          <span>Wayfind Shortcut</span>
+          <span>TabTrail Shortcut</span>
           <strong id="triggerSummary">Alt + H</strong>
         </div>
       </section>
@@ -51,7 +51,7 @@
         <button id="resetShortcutBtn" class="overlay-action" type="button">Reset shortcut</button>
       </div>
 
-      <section class="cycle-mode-panel" aria-label="Wayfind overlay">
+      <section class="cycle-mode-panel" aria-label="TabTrail overlay">
         <div class="mode-heading">
           <span>Overlay</span>
           <strong id="overlaySummary">8 visible rows</strong>

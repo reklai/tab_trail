@@ -18,7 +18,7 @@ if (!["firefox", "chrome"].includes(target)) {
 }
 
 const manifestFile = target === "chrome" ? "manifest_v3.json" : "manifest_v2.json";
-const targetBrand = "Wayfind";
+const targetBrand = "TabTrail";
 console.log(`[build] Target: ${target} (${manifestFile}, ${targetBrand})`);
 
 // Shared esbuild options — IIFE bundles for extension contexts
@@ -45,7 +45,9 @@ const staticFiles = [
   { from: resolve(root, "src/entryPoints/toolbarPopup/toolbarPopup.css"), to: "toolbarPopup/toolbarPopup.css", branded: true },
   { from: resolve(root, "src/entryPoints/optionsPage/optionsPage.html"), to: "optionsPage/optionsPage.html", branded: true },
   { from: resolve(root, "src/entryPoints/optionsPage/optionsPage.css"), to: "optionsPage/optionsPage.css", branded: true },
+  { from: resolve(root, "src/icons/icon-32.png"), to: "icons/icon-32.png" },
   { from: resolve(root, "src/icons/icon-48.png"), to: "icons/icon-48.png" },
+  { from: resolve(root, "src/icons/icon-64.png"), to: "icons/icon-64.png" },
   { from: resolve(root, "src/icons/icon-96.png"), to: "icons/icon-96.png" },
   { from: resolve(root, "src/icons/icon-128.png"), to: "icons/icon-128.png" },
 ];

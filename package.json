@@ -1,8 +1,8 @@
 {
-  "name": "wayfind",
+  "name": "tabtrail-extension",
   "version": "1.0.0",
   "private": true,
-  "description": "Press Alt+H to see where this tab came from. Retrace your browsing path and click any breadcrumb to jump back instantly.",
+  "description": "Press Alt+H to show this tab's page trail and jump back to any visited step without pressing Back over and over.",
   "license": "MIT",
   "scripts": {
     "build": "node esBuildConfig/build.mjs",

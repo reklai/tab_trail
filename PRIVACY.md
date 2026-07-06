@@ -1,39 +1,39 @@
-# Privacy Policy — Wayfind
+# Privacy Policy - TabTrail
 
-Wayfind **does not collect, transmit, or share** any personal data. There are
-no analytics, no telemetry, no external servers, and no network requests made
-by the extension. Everything stays on your device.
+TabTrail **does not collect, transmit, or share** any personal data. There are
+no analytics, no telemetry, no external servers, and no network requests made by
+the extension. Everything stays on your device.
 
 ## What is stored, and where
 
-- `wayfindSettings` (local extension storage, `storage.local`) — your trigger
+- `wayfindSettings` (local extension storage, `storage.local`) - your shortcut
   configuration (modifier, optional Shift, key or mouse button), overlay
   position, and display options.
-- `wayfindTrail:<tabId>` entries (session storage, `storage.session`) — each
+- `wayfindTrail:<tabId>` entries (session storage, `storage.session`) - each
   tab's navigation trail: page URLs, titles, favicon URLs, and timestamps.
-  Session storage is held in memory and **cleared when the browser closes**;
-  a trail is also deleted the moment its tab closes. On browsers without
-  `storage.session` the mirror falls back to local storage and is wiped at the
+  Session storage is held in memory and **cleared when the browser closes**; a
+  trail is also deleted the moment its tab closes. On browsers without
+  `storage.session`, the mirror falls back to local storage and is wiped at the
   next browser startup, preserving the same session-only behavior. Trails for
   private/incognito tabs are kept in memory only and never written to disk.
-- `storageSchemaVersion` (local) — an internal number used to migrate stored
+- `storageSchemaVersion` (local) - an internal number used to migrate stored
   data between versions.
 
-Only page titles and URLs are recorded — never page content, form data,
+Only page titles and URLs are recorded - never page content, form data,
 keystrokes, or screenshots.
 
 ## Permissions and why they are needed
 
-- `webNavigation` — observe when a tab commits a navigation (including SPA
+- `webNavigation` - observe when a tab commits a navigation (including SPA
   pushState and hash changes) so the trail can be recorded.
-- `tabs` — read tab titles and favicon URLs for trail entries, and navigate a
-  tab when you click a breadcrumb segment.
-- `storage` — persist the settings and session-scoped trails described above.
-- `scripting` — (Chrome) re-inject the content script into open tabs after
+- `tabs` - read tab titles and favicon URLs for trail entries, and navigate a
+  tab when you click a trail row.
+- `storage` - persist the settings and session-scoped trails described above.
+- `scripting` - (Chrome) re-inject the content script into open tabs after
   install or update.
-- `<all_urls>` — run the small content script that listens for the toggle
-  trigger and renders the breadcrumb overlay. It never reads page content or
-  sends anything anywhere.
+- `<all_urls>` - run the small content script that listens for the shortcut and
+  renders the trail overlay. It never reads page content or sends anything
+  anywhere.
 
 ## Contact
 

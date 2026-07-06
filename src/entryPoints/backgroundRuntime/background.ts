@@ -19,7 +19,7 @@ async function bootstrapBackground(): Promise<void> {
   const migration = await migrateStorageIfNeeded();
   if (migration.changed) {
     console.log(
-      `[Wayfind] Storage migration applied (${migration.fromVersion} -> ${migration.toVersion}).`,
+      `[TabTrail] Storage migration applied (${migration.fromVersion} -> ${migration.toVersion}).`,
     );
   }
 
@@ -27,5 +27,5 @@ async function bootstrapBackground(): Promise<void> {
 }
 
 void bootstrapBackground().catch((error) => {
-  console.error("[Wayfind] Background bootstrap failed:", error);
+  console.error("[TabTrail] Background bootstrap failed:", error);
 });

@@ -68,7 +68,7 @@ function invokeCleanupSafely(
   try {
     cleanup();
   } catch (error) {
-    console.error(`[Wayfind] ${label}:`, error);
+    console.error(`[TabTrail] ${label}:`, error);
   }
 }
 
@@ -80,7 +80,7 @@ function cleanupPanelFailSafe(): void {
 
 function handlePanelRuntimeFault(label: string, reason: unknown): void {
   if (!document.getElementById("ht-panel-host")) return;
-  console.error(`[Wayfind] ${label}; dismissing panel.`, reason);
+  console.error(`[TabTrail] ${label}; dismissing panel.`, reason);
   dismissPanel();
 }
 
