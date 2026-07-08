@@ -1,11 +1,11 @@
-# TabTrail - Store Listing
+# Current Tab History - In-Page Trail - Store Listing
 
 ## Extension Names
-- Firefox / Zen: TabTrail - Current Tab History
-- Chrome: TabTrail - Current Tab History
-- In-app name: TabTrail
+- Firefox / Zen: Current Tab History - In-Page Trail
+- Chrome: Current Tab History - In-Page Trail
+- In-app name: Current Tab History - In-Page Trail
 
-Chrome Web Store listing title: **TabTrail - Current Tab History**
+Chrome Web Store listing title: **Current Tab History - In-Page Trail**
 
 ## Chrome Summary (short, <=132 chars)
 Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.
@@ -14,13 +14,13 @@ Stop losing your place in a tab. See your current tab history, preview earlier p
 Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.
 
 ## Description
-TabTrail shows a clean page trail for the current tab, so you can see where you
+In-Page Trail shows a clean in-page trail for the current tab, so you can see where you
 came from and jump back to the right page without repeatedly pressing Back.
 
 Use it when you are deep in docs, search results, product pages, dashboards,
 GitHub issues, or research links and need to recover your place quickly.
 
-- View the page trail for the current tab.
+- View the in-page trail for the current tab.
 - Open the trail with a keyboard or mouse shortcut.
 - Preview earlier pages from the trail.
 - Jump back to any trail entry.
@@ -28,7 +28,7 @@ GitHub issues, or research links and need to recover your place quickly.
 - Copy any trail URL.
 - Keep trails session-only; they clear when the browser closes.
 
-TabTrail is focused on in-tab navigation history. It is not a full tab manager,
+In-Page Trail is focused on in-tab navigation history. It is not a full tab manager,
 session restore tool, bookmark manager, or closed-tab recovery extension.
 
 No data leaves your browser. Works on Firefox, Chrome, and Zen Browser.

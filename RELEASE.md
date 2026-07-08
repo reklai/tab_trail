@@ -1,4 +1,4 @@
-# Releasing TabTrail
+# Releasing Current Tab History - In-Page Trail
 
 Release artifacts are produced by `npm run release:package`, which builds both
 targets and zips them into `release/`.
@@ -30,7 +30,7 @@ targets and zips them into `release/`.
   carries `browser_specific_settings.gecko.id` (`@tabtrail.reklai`) and the
   `data_collection_permissions` declaration required for signing.
 - **Chrome Web Store:** upload the `.zip` MV3 build. Use the listing title from
-  `STORE.md` ("TabTrail - Current Tab History").
+  `STORE.md` ("Current Tab History - In-Page Trail").
 
 Keep `STORE.md` and `PRIVACY.md` in sync with the submitted listing. The
 `verify:store` check enforces that names, summary lengths, and permission docs

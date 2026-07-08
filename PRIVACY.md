@@ -1,6 +1,6 @@
-# Privacy Policy - TabTrail
+# Privacy Policy - In-Page Trail
 
-TabTrail **does not collect, transmit, or share** any personal data. There are
+In-Page Trail **does not collect, transmit, or share** any personal data. There are
 no analytics, no telemetry, no external servers, and no network requests made by
 the extension. Everything stays on your device.
 

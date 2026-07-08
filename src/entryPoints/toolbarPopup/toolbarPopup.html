@@ -11,23 +11,22 @@
         <button class="dot dot-close" id="closePopupBtn" type="button" title="Close" aria-label="Close popup"></button>
       </div>
       <span class="titlebar-text" id="titlebarText">__EXTENSION_NAME__</span>
-      <button class="titlebar-button" id="refreshTabTrailBtn" type="button" title="Refresh TabTrail">Refresh</button>
     </div>
 
     <div class="shortcut-panel">
-      <strong id="shortcutLabel">Press Alt + H to show your trail</strong>
+      <strong id="shortcutLabel">Press Alt + H to show Current Tab History - In-Page Trail</strong>
       <span id="shortcutStatus">Change the in-page shortcut below.</span>
     </div>
 
     <section class="fallback-panel" id="fallbackPanel" aria-live="polite" hidden>
       <strong id="fallbackTitle">Browser-Restricted Page</strong>
-      <span id="fallbackMessage">The browser does not allow extension scripts on restricted pages. TabTrail cannot listen for keyboard or mouse shortcuts or show the in-page trail here. Use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.</span>
+      <span id="fallbackMessage">The browser does not allow extension scripts on restricted pages. Current Tab History - In-Page Trail cannot listen for keyboard or mouse shortcuts or show the in-page trail here. Use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.</span>
     </section>
 
     <main class="popup-scroll">
-      <section class="cycle-mode-panel" aria-label="TabTrail shortcut">
+      <section class="cycle-mode-panel" aria-label="Current Tab History - In-Page Trail shortcut">
         <div class="mode-heading">
-          <span>TabTrail Shortcut</span>
+          <span>Current Tab History - In-Page Trail Shortcut</span>
           <strong id="triggerSummary">Alt + H</strong>
         </div>
       </section>
@@ -51,9 +50,9 @@
         <button id="resetShortcutBtn" class="overlay-action" type="button">Reset shortcut</button>
       </div>
 
-      <section class="cycle-mode-panel" aria-label="TabTrail overlay">
+      <section class="cycle-mode-panel" aria-label="Current Tab History - In-Page Trail overlay">
         <div class="mode-heading">
-          <span>Overlay</span>
+          <span>Current Tab History - In-Page Trail Overlay</span>
           <strong id="overlaySummary">8 visible rows</strong>
         </div>
       </section>
@@ -71,6 +70,7 @@
     </main>
 
     <div class="action-row">
+      <button id="refreshTabTrailBtn" type="button" title="Refresh Current Tab History - In-Page Trail">Refresh</button>
       <button id="settingsBtn" type="button">Settings</button>
     </div>
 

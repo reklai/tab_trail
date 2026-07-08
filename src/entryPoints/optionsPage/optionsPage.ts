@@ -44,7 +44,7 @@ function renderSettings(): void {
 
   const combo = formatTabTrailTriggerCombo(settings.trigger);
   const shortcutLabel = element("shortcutLabel");
-  if (shortcutLabel) shortcutLabel.textContent = `Press ${combo} to show your trail`;
+  if (shortcutLabel) shortcutLabel.textContent = `Press ${combo} to show Current Tab History - In-Page Trail`;
 
   for (const node of document.querySelectorAll<HTMLElement>("[data-combo]")) {
     node.textContent = combo;

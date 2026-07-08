@@ -18,7 +18,7 @@ if (!["firefox", "chrome"].includes(target)) {
 }
 
 const manifestFile = target === "chrome" ? "manifest_v3.json" : "manifest_v2.json";
-const targetBrand = "TabTrail";
+const targetBrand = "Current Tab History - In-Page Trail";
 console.log(`[build] Target: ${target} (${manifestFile}, ${targetBrand})`);
 
 // Shared esbuild options — IIFE bundles for extension contexts

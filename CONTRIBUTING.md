@@ -1,4 +1,4 @@
-# Contributing to TabTrail
+# Contributing to Current Tab History - In-Page Trail
 
 Thanks for helping out. This is a vanilla TypeScript WebExtension - no UI
 frameworks - built with esbuild and checked with Node's built-in test runner.

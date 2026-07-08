@@ -58,7 +58,10 @@ test("popup layout is fixed-height, scroll-safe, and never uses 100vh", () => {
   assert.match(popupCss, /\.control-row small\s*\{[\s\S]*font-size:\s*11px/);
   assert.match(popupCss, /\.control-row strong\s*\{[\s\S]*font-size:\s*13px/);
   assert.match(popupCss, /\.section-actions\s*\{[\s\S]*justify-content:\s*flex-end/);
-  assert.match(popupCss, /\.action-row\s*\{[\s\S]*justify-content:\s*flex-end/);
+  assert.match(
+    popupCss,
+    /\.action-row\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
+  );
   assert.doesNotMatch(popupCss, /#resetDefaultsBtn/);
 });
 

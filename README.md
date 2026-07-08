@@ -1,6 +1,6 @@
-# TabTrail
+# Current Tab History - In-Page Trail
 
-**Press Alt + H to show this tab's page trail.** TabTrail automatically tracks
+**Press Alt + H to show In-Page Trail.** In-Page Trail automatically tracks
 the pages visited inside each tab and shows them as a compact, draggable vertical
 trail with page titles, URL subtitles, and the current page highlighted. Click
 any row to jump straight back.
@@ -35,13 +35,13 @@ dual build).
 - **Alt + H** (or your configured shortcut) toggles the trail; **Esc** or the
   close button hides it.
 - **Click** a row to jump back or forward to it.
-- **Hover** a truncated row for a delayed detail card with the full title, URL,
-  and relative timestamp.
-- **Right-click** a row for an in-page preview pane, *Open in new tab*, *Open
-  in new window*, and *Copy URL*.
+- **Click the ⋯ button** beside a row to show the full title, URL, relative
+  timestamp, preview, *Open in new tab*, *Open in new window*, and *Copy URL*.
+- **Right-click** a row to open the same menu without using the ⋯ button.
 - **Drag** the trail by its handle to reposition it; the position is remembered.
 - **Click** the settings button in the trail to open settings.
-- **Drag** the preview pane by its handle to move only the open preview.
+- **Drag** the preview pane by its handle after opening a preview from the row
+  menu.
 - Trails longer than the configured row budget collapse into a **+N more** row;
   click it to expand in place, then use **Show less** to collapse again.
 
@@ -57,7 +57,7 @@ dual build).
   in the MV3 manifest. Chrome also uses `scripting` for install-time
   content-script re-injection.
 - A page-initiated redirect replaces a history entry, which breaks the 1:1
-  trail-to-history mapping across that hop. TabTrail detects this and falls
+  trail-to-history mapping across that hop. In-Page Trail detects this and falls
   back to a plain navigation for such jumps.
 
 ## Development

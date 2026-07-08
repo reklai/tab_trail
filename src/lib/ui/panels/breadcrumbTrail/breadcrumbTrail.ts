@@ -240,7 +240,7 @@ function buildBranchHeader(callbacks: BreadcrumbTrailCallbacks): HTMLDivElement 
   header.appendChild(buildSettingsButton(callbacks));
   const title = document.createElement("span");
   title.className = "wf-branch-title";
-  title.textContent = "Page Trail";
+  title.textContent = "In-Page Trail";
   header.appendChild(title);
   header.appendChild(buildGrip());
   header.appendChild(buildCloseButton());
@@ -365,7 +365,7 @@ function buildRowMoreButton(
   more.type = "button";
   more.textContent = "⋯";
   more.title = "More";
-  more.setAttribute("aria-label", "More details and actions");
+  more.setAttribute("aria-label", "More options for this page");
   more.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
