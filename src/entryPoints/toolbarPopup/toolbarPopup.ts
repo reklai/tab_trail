@@ -3,6 +3,7 @@
 import browser from "webextension-polyfill";
 import {
   DEFAULT_TABTRAIL_TRIGGER,
+  EXTENSION_TITLE,
   formatTabTrailTriggerCombo,
   loadTabTrailSettings,
   MAX_VISIBLE_SEGMENTS,
@@ -16,8 +17,6 @@ import {
 } from "../../lib/ui/settings/settingsControls";
 import { isKnownBrowserStoreRestrictedUrl } from "../../lib/common/utils/restrictedUrls";
 
-const EXTENSION_TITLE = "Current Tab History - In-Page Trail";
-
 type PageShortcutAvailability = "ready" | "restricted" | "unavailable";
 
 interface FallbackNotice {
@@ -27,12 +26,12 @@ interface FallbackNotice {
 
 const BROWSER_RESTRICTED_NOTICE: FallbackNotice = {
   title: "Browser-Restricted Page",
-  message: "The browser does not allow extension scripts on restricted pages. Current Tab History - In-Page Trail cannot listen for keyboard or mouse shortcuts or show the in-page trail here. Use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.",
+  message: `The browser does not allow extension scripts on restricted pages. ${EXTENSION_TITLE} cannot listen for keyboard or mouse shortcuts or show the in-page trail here. Use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.`,
 };
 
 const PAGE_SHORTCUT_UNAVAILABLE_NOTICE: FallbackNotice = {
   title: "Page Shortcut Not Ready",
-  message: "Current Tab History - In-Page Trail cannot reach this tab yet. Refresh the page, then try the shortcut again. You can still use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.",
+  message: `${EXTENSION_TITLE} cannot reach this tab yet. Refresh the page, then try the shortcut again. You can still use the popup controls below to change shortcut and overlay settings, reset the shortcut, or open Settings.`,
 };
 
 function isPageShortcutRestrictedUrl(url: string | undefined): boolean {
@@ -67,7 +66,7 @@ document.addEventListener("DOMContentLoaded", () => {
   void initPopup().catch(() => {
     const toast = document.getElementById("popupToast");
     if (!toast) return;
-    toast.textContent = "Current Tab History - In-Page Trail popup failed to initialize.";
+    toast.textContent = `${EXTENSION_TITLE} popup failed to initialize.`;
     toast.classList.add("is-visible");
   });
 });
@@ -129,7 +128,7 @@ async function initPopup(): Promise<void> {
     maxVisibleInput.value = String(settings.maxVisibleSegments);
 
     const combo = formatTabTrailTriggerCombo(settings.trigger);
-    shortcutLabel.textContent = `Press ${combo} to show Current Tab History - In-Page Trail`;
+    shortcutLabel.textContent = `Press ${combo} to show ${EXTENSION_TITLE}`;
     const pageShortcutsReady = shortcutAvailability === "ready";
     fallbackPanel.hidden = pageShortcutsReady;
     shortcutStatus.hidden = !pageShortcutsReady;

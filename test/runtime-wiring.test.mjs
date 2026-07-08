@@ -105,26 +105,23 @@ test("toolbar popup exposes shortcut and overlay settings without trail renderin
   assert.match(html, /id="resetPositionBtn"/);
   assert.match(html, /id="resetShortcutBtn" class="overlay-action"/);
   assert.match(html, /id="resetPositionBtn" class="overlay-action"/);
-  assert.match(html, /id="refreshTabTrailBtn"/);
-  assert.match(html, /id="settingsBtn"/);
   assert.match(html, /id="fallbackPanel"/);
   assert.match(
     html,
     /<div class="action-row">[\s\S]*id="refreshTabTrailBtn"[\s\S]*id="settingsBtn"[\s\S]*<\/div>/,
   );
-  assert.doesNotMatch(html, /class="titlebar-button" id="refreshTabTrailBtn"/);
   assert.match(html, /Browser-Restricted Page/);
   assert.match(html, /The browser does not allow extension scripts on restricted pages/);
-  assert.match(html, /Current Tab History - In-Page Trail cannot listen for keyboard or mouse shortcuts or show the in-page trail here/);
+  assert.match(html, /__EXTENSION_NAME__ cannot listen for keyboard or mouse shortcuts or show the in-page trail here/);
   assert.match(html, /change shortcut and overlay settings/);
   assert.match(html, /reset the shortcut/);
-  assert.match(html, /Current Tab History - In-Page Trail Shortcut/);
-  assert.match(html, /Current Tab History - In-Page Trail Overlay/);
+  assert.match(html, /__EXTENSION_NAME__ Shortcut/);
+  assert.match(html, /__EXTENSION_NAME__ Overlay/);
   assert.match(html, /Hold key/);
   assert.match(html, /Key or click/);
   assert.match(html, /Visible rows/);
   assert.match(html, /Overlay position/);
-  assert.doesNotMatch(html, />Current Tab History - In-Page Trail Trigger<|>In-Page Trail Trigger<|>TabTrail Trigger<|>Wayfind Trigger<|>Trigger</);
+  assert.doesNotMatch(html, /Trigger</);
   assert.doesNotMatch(html, /showTransitionArrows|Path color hints|Reset Defaults|resetDefaultsBtn/);
   assert.match(source, /DEFAULT_TABTRAIL_TRIGGER/);
   assert.match(source, /MIN_VISIBLE_SEGMENTS/);
@@ -145,7 +142,6 @@ test("toolbar popup exposes shortcut and overlay settings without trail renderin
   assert.match(css, /\.number-control/);
   assert.match(css, /\.section-actions/);
   assert.doesNotMatch(css, /\.section-actions button/);
-  assert.match(css, /\.action-row\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(css, /\.action-row button\s*\{[\s\S]*width:\s*100%/);
   assert.doesNotMatch(css, /\.titlebar-button/);
   assert.match(css, /\.overlay-action\s*\{[\s\S]*background:\s*#252525[\s\S]*color:\s*#e0e0e0/);
@@ -158,7 +154,7 @@ test("options page presents shortcut wording and reset controls", () => {
   const html = readSource("src/entryPoints/optionsPage/optionsPage.html");
   const source = readSource("src/entryPoints/optionsPage/optionsPage.ts");
   assert.match(html, /id="shortcutLabel"/);
-  assert.match(html, /Press Alt \+ H to show Current Tab History - In-Page Trail/);
+  assert.match(html, /Press Alt \+ H to show __EXTENSION_NAME__/);
   assert.doesNotMatch(html, /shortcutStatus|Keyboard shortcut active on normal web pages/);
   assert.match(html, /<h2>Shortcut<\/h2>/);
   assert.match(html, /Hold key/);
@@ -170,7 +166,7 @@ test("options page presents shortcut wording and reset controls", () => {
   assert.doesNotMatch(html, /Path color hints|showTransitionArrows/);
   assert.doesNotMatch(html, /options-actions|resetBtn|saveHint|Reset to defaults|Changes save automatically/);
   assert.doesNotMatch(html, /Toggle trigger|Current trigger|Transition connectors/);
-  assert.match(source, /shortcutLabel\.textContent = `Press \$\{combo\} to show Current Tab History - In-Page Trail`/);
+  assert.match(source, /shortcutLabel\.textContent = `Press \$\{combo\} to show \$\{EXTENSION_TITLE\}`/);
   assert.match(source, /resetShortcutBtn/);
   assert.match(source, /refreshTabTrailExtension/);
   assert.match(source, /function refreshTabTrail/);

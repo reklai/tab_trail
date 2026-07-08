@@ -25,6 +25,9 @@ function zipDirectory(sourceDir, archivePath) {
   run("zip", ["-r", "-q", archivePath, "."], { cwd: sourceDir });
 }
 
+// Directories left out of the source archive (kept in sync with .gitignore).
+const SOURCE_ZIP_EXCLUDED_DIRS = [".agents", ".claude", ".codex", "dist", "release", "node_modules"];
+
 function zipSource(archivePath) {
   run("zip", [
     "-r",
@@ -33,20 +36,7 @@ function zipSource(archivePath) {
     ".",
     "-x",
     ".git/*",
-    ".agents/",
-    ".agents/*",
-    ".claude",
-    ".claude/",
-    ".claude/*",
-    ".codex",
-    ".codex/",
-    ".codex/*",
-    "dist/",
-    "dist/*",
-    "release/",
-    "release/*",
-    "node_modules/",
-    "node_modules/*",
+    ...SOURCE_ZIP_EXCLUDED_DIRS.flatMap((dir) => [dir, `${dir}/`, `${dir}/*`]),
   ]);
 }
 

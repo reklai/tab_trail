@@ -5,6 +5,11 @@
 
 import browser from "webextension-polyfill";
 
+// User-facing extension name. Static assets use the __EXTENSION_NAME__
+// placeholder substituted at build time (esBuildConfig/build.mjs); keep the
+// two in sync when rebranding.
+export const EXTENSION_TITLE = "Current Tab History - In-Page Trail";
+
 export const TABTRAIL_STORAGE_KEYS = {
   settings: "tabtrailSettings",
 } as const;

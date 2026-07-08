@@ -7,6 +7,7 @@ import browser from "webextension-polyfill";
 import {
   DEFAULT_TABTRAIL_SETTINGS,
   DEFAULT_TABTRAIL_TRIGGER,
+  EXTENSION_TITLE,
   formatTabTrailTriggerCombo,
   loadTabTrailSettings,
   saveTabTrailSettings,
@@ -44,7 +45,7 @@ function renderSettings(): void {
 
   const combo = formatTabTrailTriggerCombo(settings.trigger);
   const shortcutLabel = element("shortcutLabel");
-  if (shortcutLabel) shortcutLabel.textContent = `Press ${combo} to show Current Tab History - In-Page Trail`;
+  if (shortcutLabel) shortcutLabel.textContent = `Press ${combo} to show ${EXTENSION_TITLE}`;
 
   for (const node of document.querySelectorAll<HTMLElement>("[data-combo]")) {
     node.textContent = combo;
