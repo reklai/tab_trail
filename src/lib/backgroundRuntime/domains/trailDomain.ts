@@ -11,9 +11,11 @@ import browser, { Tabs } from "webextension-polyfill";
 import { TRAIL_MIRROR_KEY_PREFIX, trailMirrorKey } from "../../common/contracts/tabtrail";
 import {
   applyNavigationEvent,
+  createInheritedTrailState,
   EMPTY_TRAIL_STATE,
   normalizeTrailState,
   resolveJumpPlan,
+  slicePathToIndex,
 } from "../../core/trail/trailCore";
 import { createInFlightMemo, createKeyedTaskQueue, sleep } from "../../common/utils/asyncFlow";
 import { isKnownBrowserStoreRestrictedUrl } from "../../common/utils/restrictedUrls";
@@ -45,12 +47,21 @@ type ContentScriptInjectionOutcome =
   | "skipped"
   | "failed";
 
+type ContentScriptMessageDelivery =
+  | { delivered: true; response: unknown }
+  | { delivered: false };
+
 export interface TrailDomain {
   ensureLoaded(): Promise<void>;
   toggleOverlay(senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
   jumpTo(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
   openEntryInNewTab(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
   openEntryInNewWindow(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
+  openSavedTrail(
+    path: TrailEntry[],
+    mode: SavedTrailOpenMode,
+    senderTab?: Tabs.Tab,
+  ): Promise<TabTrailActionResult>;
   setOverlayOpen(senderTab: Tabs.Tab | undefined, open: boolean): TabTrailActionResult;
   refreshExtension(): Promise<TabTrailActionResult>;
   activateExistingContentScripts(): Promise<void>;
@@ -83,7 +94,10 @@ export function createTrailDomain(): TrailDomain {
   const trailsByTabId = new Map<number, TrailState>();
   const incognitoTabIds = new Set<number>();
   const overlayOpenTabIds = new Set<number>();
-  const pendingJumpByTabId = new Map<number, number>();
+  const pendingJumpByTabId = new Map<
+    number,
+    { index: number; kind: TrailJumpPlan["kind"] }
+  >();
 
   // Serializes reducer runs + mirror writes per tab so a fast SPA can't
   // interleave two navigation events for the same tab.
@@ -156,13 +170,20 @@ export function createTrailDomain(): TrailDomain {
 
   // --- Pushing state to the overlay ---
 
-  async function pushTrailToTab(tabId: number, type: "TRAIL_SHOW" | "TRAIL_UPDATED"): Promise<boolean> {
+  async function pushTrailToTab(
+    tabId: number,
+    type: "TRAIL_SHOW" | "TRAIL_UPDATED",
+  ): Promise<ContentScriptMessageDelivery> {
     const state = getTrailState(tabId);
     try {
-      await browser.tabs.sendMessage(tabId, { type, state }, { frameId: 0 });
-      return true;
+      const response = await browser.tabs.sendMessage(
+        tabId,
+        { type, state },
+        { frameId: 0 },
+      ) as unknown;
+      return { delivered: true, response };
     } catch (_) {
-      return false;
+      return { delivered: false };
     }
   }
 
@@ -206,7 +227,7 @@ export function createTrailDomain(): TrailDomain {
       // Populate the incognito cache before the first mirror write so the
       // local-storage fallback never sees a private tab's trail.
       await isIncognitoTab(tabId);
-      const pendingJumpIndex = pendingJumpByTabId.get(tabId) ?? null;
+      const pendingJump = pendingJumpByTabId.get(tabId) ?? null;
       pendingJumpByTabId.delete(tabId);
       const event: TrailNavigationEvent = {
         kind,
@@ -214,7 +235,8 @@ export function createTrailDomain(): TrailDomain {
         timestamp: Date.now(),
         transitionType: details.transitionType,
         qualifiers: details.transitionQualifiers,
-        pendingJumpIndex,
+        pendingJumpIndex: pendingJump?.index ?? null,
+        pendingJumpKind: pendingJump?.kind ?? null,
       };
       const { state, changed } = applyNavigationEvent(getTrailState(tabId), event);
       if (!changed) return;
@@ -308,18 +330,82 @@ export function createTrailDomain(): TrailDomain {
     return active?.id ?? null;
   }
 
+  async function seedInheritedTrail(tabId: number, state: TrailState): Promise<void> {
+    await tabQueue.run(tabId, async () => {
+      await ensureLoaded();
+      const tab = await browser.tabs.get(tabId).catch(() => null);
+      if (!tab) return;
+      if (tab.incognito) incognitoTabIds.add(tabId);
+      const endpoint = state.entries[state.cursor];
+      const liveUrl = normalizePageUrl(tab.url);
+      const endpointUrl = normalizePageUrl(endpoint?.url);
+      // A cached redirect can commit before tabs.create resolves. Preserve the
+      // inherited prefix, then append the already-live destination so seeding
+      // never moves the trail cursor behind the actual page.
+      const seeded = liveUrl && endpointUrl && liveUrl !== endpointUrl
+        ? applyNavigationEvent(state, {
+            kind: "committed",
+            url: liveUrl,
+            timestamp: Date.now(),
+            transitionType: "other",
+            qualifiers: ["server_redirect"],
+          }).state
+        : state;
+      trailsByTabId.set(tabId, seeded);
+      mirrorTrail(tabId);
+      patchCursorEntry(tabId, tab);
+    });
+  }
+
+  async function createTabFromInheritedTrail(
+    state: TrailState,
+    sourceTab: Tabs.Tab | null | undefined,
+    active: boolean,
+  ): Promise<TabTrailActionResult> {
+    const endpoint = state.entries[state.cursor];
+    if (!endpoint) return { ok: false, reason: "Trail endpoint missing" };
+    try {
+      const created = await browser.tabs.create({
+        url: endpoint.url,
+        active,
+        ...(sourceTab?.windowId != null ? { windowId: sourceTab.windowId } : {}),
+        ...(sourceTab?.index != null ? { index: sourceTab.index + 1 } : {}),
+      });
+      if (created.id != null) {
+        await seedInheritedTrail(created.id, state);
+      }
+      return { ok: true };
+    } catch (_) {
+      return { ok: false, reason: "Could not open tab" };
+    }
+  }
+
   async function toggleOverlay(senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
     await ensureLoaded();
     const tabId = await resolveTargetTabId(undefined, senderTab);
     if (tabId == null) return { ok: false, reason: "No tab for overlay" };
-    let delivered = await pushTrailToTab(tabId, "TRAIL_SHOW");
-    if (!delivered) {
+    let delivery = await pushTrailToTab(tabId, "TRAIL_SHOW");
+    if (!delivery.delivered) {
       const tab = await browser.tabs.get(tabId).catch(() => null);
       if (tab && didInjectContentScript(await injectContentScriptIntoTab(tab))) {
-        delivered = await pushTrailToTab(tabId, "TRAIL_SHOW");
+        delivery = await pushTrailToTab(tabId, "TRAIL_SHOW");
       }
     }
-    return delivered ? { ok: true } : { ok: false, reason: "Overlay unavailable on this page" };
+    if (!delivery.delivered) {
+      return { ok: false, reason: "Overlay unavailable on this page" };
+    }
+    const response = delivery.response;
+    if (typeof response !== "object" || response === null) {
+      return { ok: false, reason: "Overlay unavailable on this page" };
+    }
+    const result = response as { ok?: unknown; reason?: unknown };
+    if (result.ok === true) return { ok: true };
+    return {
+      ok: false,
+      ...(typeof result.reason === "string" ? { reason: result.reason } : {
+        reason: "Overlay unavailable on this page",
+      }),
+    };
   }
 
   async function jumpTo(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
@@ -330,7 +416,7 @@ export function createTrailDomain(): TrailDomain {
     const plan = resolveJumpPlan(state, index);
     if (!plan) return { ok: true };
 
-    pendingJumpByTabId.set(targetTabId, index);
+    pendingJumpByTabId.set(targetTabId, { index, kind: plan.kind });
     if (plan.kind === "historyGo") {
       try {
         await browser.tabs.sendMessage(targetTabId, { type: "HISTORY_GO", delta: plan.delta }, { frameId: 0 });
@@ -338,6 +424,7 @@ export function createTrailDomain(): TrailDomain {
       } catch (_) {
         // No content script in that tab (privileged page); fall through to a
         // plain navigation on the same trail target.
+        pendingJumpByTabId.set(targetTabId, { index, kind: "navigate" });
       }
     }
     const url = state.entries[index]?.url;
@@ -358,34 +445,71 @@ export function createTrailDomain(): TrailDomain {
     await ensureLoaded();
     const targetTabId = await resolveTargetTabId(tabId, senderTab);
     if (targetTabId == null) return { ok: false, reason: "No source tab" };
-    const entry = getTrailState(targetTabId).entries[index];
-    if (!entry) return { ok: false, reason: "Trail entry missing" };
+    const path = slicePathToIndex(getTrailState(targetTabId), index);
+    if (!path) return { ok: false, reason: "Trail entry missing" };
+    const inherited = createInheritedTrailState(path);
     const sourceTab = await browser.tabs.get(targetTabId).catch(() => null);
-    try {
-      await browser.tabs.create({
-        url: entry.url,
-        active: false,
-        ...(sourceTab?.windowId != null ? { windowId: sourceTab.windowId } : {}),
-        ...(sourceTab?.index != null ? { index: sourceTab.index + 1 } : {}),
-      });
-      return { ok: true };
-    } catch (_) {
-      return { ok: false, reason: "Could not open tab" };
-    }
+    return createTabFromInheritedTrail(inherited, sourceTab, false);
   }
 
   async function openEntryInNewWindow(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
     await ensureLoaded();
     const targetTabId = await resolveTargetTabId(tabId, senderTab);
     if (targetTabId == null) return { ok: false, reason: "No source tab" };
-    const entry = getTrailState(targetTabId).entries[index];
-    if (!entry) return { ok: false, reason: "Trail entry missing" };
+    const path = slicePathToIndex(getTrailState(targetTabId), index);
+    if (!path) return { ok: false, reason: "Trail entry missing" };
+    const inherited = createInheritedTrailState(path);
+    const endpoint = inherited.entries[inherited.cursor];
+    if (!endpoint) return { ok: false, reason: "Trail endpoint missing" };
+    const sourceTab = senderTab?.id === targetTabId
+      ? senderTab
+      : await browser.tabs.get(targetTabId).catch(() => null);
+    if (!sourceTab) return { ok: false, reason: "No source tab" };
+    const sourceIncognito = sourceTab.incognito === true;
     try {
-      await browser.windows.create({ url: entry.url });
+      const created = await browser.windows.create({
+        url: endpoint.url,
+        incognito: sourceIncognito,
+      });
+      const seededTabId = created.tabs?.find((tab) => tab.id != null)?.id;
+      // Never copy lineage between regular and private profiles, even if a
+      // browser ignores or cannot honor the requested window profile.
+      if (seededTabId != null && created.incognito === sourceIncognito) {
+        await seedInheritedTrail(seededTabId, inherited);
+      }
       return { ok: true };
     } catch (_) {
       return { ok: false, reason: "Could not open window" };
     }
+  }
+
+  // Open a saved path at its endpoint with the full path as inherited lineage.
+  // New-tab mode creates a tab; current-tab mode navigates the active tab and
+  // seeds the same non-historyBacked prefix so jumps still work.
+  async function openSavedTrail(
+    path: TrailEntry[],
+    mode: SavedTrailOpenMode,
+    senderTab?: Tabs.Tab,
+  ): Promise<TabTrailActionResult> {
+    await ensureLoaded();
+    const inherited = createInheritedTrailState(path);
+    const endpoint = inherited.entries[inherited.cursor];
+    if (!endpoint) return { ok: false, reason: "Trail endpoint missing" };
+    const targetTabId = await resolveTargetTabId(undefined, senderTab);
+    if (mode === "current") {
+      if (targetTabId == null) return { ok: false, reason: "No tab to navigate" };
+      try {
+        await browser.tabs.update(targetTabId, { url: endpoint.url });
+        await seedInheritedTrail(targetTabId, inherited);
+        return { ok: true };
+      } catch (_) {
+        return { ok: false, reason: "Navigation failed" };
+      }
+    }
+    const sourceTab =
+      senderTab ??
+      (targetTabId != null ? await browser.tabs.get(targetTabId).catch(() => null) : null);
+    return createTabFromInheritedTrail(inherited, sourceTab, true);
   }
 
   function setOverlayOpen(senderTab: Tabs.Tab | undefined, open: boolean): TabTrailActionResult {
@@ -468,6 +592,7 @@ export function createTrailDomain(): TrailDomain {
     jumpTo,
     openEntryInNewTab,
     openEntryInNewWindow,
+    openSavedTrail,
     setOverlayOpen,
     refreshExtension,
     activateExistingContentScripts,

@@ -31,14 +31,29 @@ test("message handler routes every trail message and falls back to UNHANDLED", (
     "TRAIL_JUMP",
     "TRAIL_OPEN_IN_NEW_TAB",
     "TRAIL_OPEN_IN_NEW_WINDOW",
+    "SAVED_TRAIL_SAVE",
+    "SAVED_TRAIL_RENAME",
+    "SAVED_TRAIL_REPLACE",
+    "SAVED_TRAIL_SET_PINNED",
+    "SAVED_TRAIL_DELETE",
+    "SAVED_TRAIL_RESTORE",
+    "SAVED_TRAIL_OPEN",
     "TRAIL_OVERLAY_STATE",
     "TABTRAIL_OPEN_OPTIONS",
     "TABTRAIL_REFRESH_EXTENSION",
   ]) {
     assert.match(source, new RegExp(`case "${messageType}"`), `handler must route ${messageType}`);
   }
+  assert.match(source, /domain\.openSavedTrail\(message\.path,/);
+  assert.match(source, /saveCapturedTrail\(/);
+  assert.match(source, /renameSavedTrail\(/);
+  assert.match(source, /replaceSavedTrail\(/);
+  assert.match(source, /setSavedTrailPinned\(/);
+  assert.match(source, /deleteSavedTrail\(/);
+  assert.match(source, /restoreSavedTrail\(/);
   assert.match(source, /domain\.refreshExtension\(\)/);
   assert.match(source, /default:\s*\n?\s*return UNHANDLED/);
+  assert.doesNotMatch(source, /SAVED_TRAIL_DUPLICATE|duplicateSavedTrail/);
 });
 
 test("domain registers all three webNavigation intakes and serializes per tab", () => {
@@ -60,7 +75,18 @@ test("domain registers all three webNavigation intakes and serializes per tab", 
   assert.match(source, /function shouldRetryContentScriptInjection/);
   assert.match(source, /outcome === "failed" \|\| outcome === "injected-top-frame"/);
   assert.match(source, /openEntryInNewWindow/);
-  assert.match(source, /windows\.create\(\{\s*url:\s*entry\.url\s*\}\)/);
+  assert.match(source, /openSavedTrail/);
+  assert.match(source, /createInheritedTrailState\(path\)/);
+  assert.match(source, /seedInheritedTrail\(created\.id, state\)/);
+  assert.match(source, /seedInheritedTrail\(seededTabId, inherited\)/);
+  assert.match(source, /seedInheritedTrail\(targetTabId, inherited\)/);
+  assert.match(source, /liveUrl !== endpointUrl/);
+  assert.match(source, /pendingJumpByTabId\.set\(targetTabId, \{ index, kind: "navigate" \}\)/);
+  assert.match(
+    source,
+    /windows\.create\(\{\s*url:\s*endpoint\.url,\s*incognito:\s*sourceIncognito,\s*\}\)/,
+  );
+  assert.match(source, /created\.incognito === sourceIncognito/);
   assert.doesNotMatch(source, /previewEntry|type:\s*"popup"|width:\s*420|height:\s*560/);
 });
 
@@ -71,14 +97,61 @@ test("content script captures both trigger event kinds in capture phase and is r
   assert.match(source, /addEventListener\("contextmenu", mouseFollowUpHandler, true\)/);
   assert.match(source, /matchesToggleTrigger/);
   assert.match(source, /window\.__tabtrailCleanup/);
-  assert.match(source, /openTabTrailOptions/);
-  assert.match(source, /onOpenOptions:\s*\(\)\s*=>/);
+  assert.match(source, /createOverlayFrameController/);
+  assert.match(source, /OVERLAY_FRAME_CHALLENGE/);
+  assert.match(source, /overlayController\?\.open\(typed\.state, settings\)/);
+  assert.match(source, /overlayController\?\.updateTrail\(typed\.state\)/);
   assert.match(source, /HISTORY_GO/);
   assert.match(source, /const closeOpenOverlay\s*=\s*\(\):\s*void\s*=>/);
   assert.match(source, /document\.visibilityState !== "hidden"/);
   assert.match(source, /document\.addEventListener\("visibilitychange", visibilityChangeHandler\)/);
   assert.match(source, /document\.removeEventListener\("visibilitychange", visibilityChangeHandler\)/);
+  assert.match(source, /overlayController\?\.updateSettings\(settings\)/);
+  assert.match(
+    source,
+    /onPositionChange:\s*async \(position\)\s*=>\s*\{\s*settings = \{ \.\.\.settings, overlayPosition: position \};[\s\S]*await saveTabTrailSettings\(settings\)/,
+  );
   assert.doesNotMatch(source, /addEventListener\("blur"/);
+});
+
+test("isolated overlay host authenticates, clips, and owns focused input outside the page event path", () => {
+  const app = readSource("src/lib/appInit/appInit.ts");
+  const host = readSource("src/lib/ui/overlayFrame/overlayFrameController.ts");
+  const frame = readSource("src/entryPoints/overlayFrame/overlayFrame.ts");
+  const frameCss = readSource("src/entryPoints/overlayFrame/overlayFrame.css");
+  assert.match(host, /attachShadow\(\{ mode: "closed" \}\)/);
+  assert.match(host, /new MessageChannel\(\)/);
+  assert.match(host, /TABTRAIL_OVERLAY_CONNECT/);
+  assert.match(host, /validateSurfaceUpdate/);
+  assert.match(host, /clip-path/);
+  assert.match(host, /pointer-events", "none"/);
+  assert.match(host, /pointer-events", "auto"/);
+  assert.match(host, /focusOwned/);
+  // Open is reported as soon as the host session exists so TRAIL_UPDATED is not
+  // dropped during the iframe handshake; settleOpened still waits for surfaces.
+  assert.match(
+    host,
+    /session = current;[\s\S]*reportedOpen = true;[\s\S]*reportTrailOverlayState\(true\)/,
+  );
+  assert.match(host, /if \(!current\.settled\)[\s\S]*settleOpened\(current, true\)/);
+  assert.doesNotMatch(host, /SAVED_SUBSCRIBE|SAVED_UNSUBSCRIBE/);
+  assert.match(host, /Duplicate or stale overlay request/);
+  assert.doesNotMatch(host, /SAVED_DUPLICATE|browserSavedTrailsClient\.duplicate/);
+  assert.match(
+    host,
+    /const invalidateGeometry[\s\S]*visibility", "hidden"[\s\S]*HOST_REQUEST_SURFACES/,
+  );
+  assert.match(frame, /claimOverlayFrame\(connection\.message\.nonce\)/);
+  assert.match(frame, /FRAME_FOCUS_OWNERSHIP/);
+  assert.match(
+    frame,
+    /case "HOST_REQUEST_SURFACES":[\s\S]*sendMeasuredSurfaceGeometry\(true\)/,
+  );
+  assert.match(frame, /force \|\| sendContractionNextFrame/);
+  assert.match(frameCss, /overscroll-behavior:\s*none/);
+  assert.match(frame, /data-tabtrail-hit-surface/);
+  assert.doesNotMatch(frame, /SAVED_DUPLICATE|\bduplicate:\s*async/);
+  assert.doesNotMatch(app, /showBreadcrumbTrail|hideBreadcrumbTrail/);
 });
 
 test("trigger contract accepts left, middle, and right mouse buttons only", () => {
@@ -174,86 +247,86 @@ test("options page presents shortcut wording and reset controls", () => {
   assert.doesNotMatch(source, /shortcutStatus|resetBtn|showTransitionArrows|Keyboard shortcut active on normal web pages/);
 });
 
-test("branch overlay context menu order and callbacks match the trail actions", () => {
+test("live branch overlay hosts the bar and delegates saved trails", () => {
   const source = readSource("src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.ts");
   assert.match(source, /onOpenOptions\(\):\s*void/);
   assert.match(source, /onOpenInNewWindow\(index:\s*number\):\s*void/);
   assert.match(source, /branchList\.className\s*=\s*"wf-branch-list"/);
-  assert.match(
-    source,
-    /bar\.appendChild\(buildBranchHeader\(callbacks\)\)[\s\S]*bar\.appendChild\(branchList\)/,
-  );
-  assert.match(
-    source,
-    /header\.appendChild\(buildSettingsButton\(callbacks\)\)[\s\S]*header\.appendChild\(title\)[\s\S]*header\.appendChild\(buildGrip\(\)\)[\s\S]*header\.appendChild\(buildCloseButton\(\)\)/,
-  );
-  assert.match(source, /title\.textContent\s*=\s*"In-Page Trail"/);
-  assert.match(source, /settings\.className\s*=\s*"wf-settings"/);
-  assert.match(source, /settings\.textContent\s*=\s*"⚙"/);
-  assert.match(source, /settings\.addEventListener\("click",\s*\(\)\s*=>\s*callbacks\.onOpenOptions\(\)\)/);
-  assert.match(source, /grip\.addEventListener\("pointerdown",\s*startDrag\)/);
-  assert.match(source, /className\s*=\s*"wf-branch-row"/);
-  assert.match(source, /className\s*=\s*"wf-branch-connector"/);
-  assert.match(source, /function buildRowMoreButton/);
-  assert.match(source, /more\.className\s*=\s*"wf-row-more"/);
-  assert.match(source, /more\.textContent\s*=\s*"⋯"/);
-  assert.match(source, /aria-label",\s*"More options for this page"/);
-  assert.match(source, /toggleEntryMenu\(anchor,\s*more,\s*index,\s*entry,\s*callbacks\)/);
-  assert.match(source, /let menuAnchorElement:\s*HTMLElement \| null = null/);
-  assert.match(source, /let menuTriggerElement:\s*HTMLElement \| null = null/);
-  assert.match(
-    source,
-    /if \(menuElement && menuAnchorElement === anchor && menuTriggerElement === trigger\)/,
-  );
-  assert.match(source, /menuAnchorElement = anchor/);
-  assert.match(source, /menuTriggerElement = trigger/);
-  assert.doesNotMatch(source, /trigger\?:|trigger \?\? null/);
-  assert.match(source, /openEntryMenu\(row,\s*index,\s*entry,\s*callbacks,\s*more\)/);
-  assert.match(source, /path\.includes\(menuTriggerElement\)/);
-  assert.match(source, /if \(menuElement\) \{\s*closeEntryMenu\(\);\s*return;/);
-  assert.match(source, /if \(previewElement\) \{\s*closeEntryPreview\(\);\s*return;/);
-  assert.match(source, /const budget\s*=\s*Math\.min\(Math\.max\(1,\s*maxVisible\),\s*total\)/);
-  assert.match(source, /addIndex\(total - 1\)/);
-  assert.match(source, /selected\.size < budget/);
-  assert.match(source, /function buildCollapsePill/);
-  assert.match(source, /pill\.textContent\s*=\s*"Show less"/);
-  assert.match(source, /session\.expanded\s*=\s*false/);
-  assert.match(source, /className\s*=\s*"wf-branch-entry-title"/);
-  assert.match(source, /className\s*=\s*"wf-branch-entry-url"/);
-  assert.match(source, /function entryUrlSubtitle/);
-  assert.doesNotMatch(source, /function scheduleTooltip|rowNeedsTooltip|wf-tooltip/);
+  assert.match(source, /buildLibraryButton/);
+  assert.match(source, /toggleSavedTrailsLibrary/);
+  assert.match(source, /openSaveTrailDialog/);
+  assert.match(source, /bindSavedTrailsHost/);
+  assert.match(source, /installOverlayInteractionShield\(shadow\)/);
+  assert.match(source, /removeInteractionShield\(\)/);
+  assert.match(source, /closeTopOverlaySurface/);
   assert.match(source, /function openEntryPreview/);
-  assert.match(source, /function positionPreviewPane/);
-  assert.match(source, /session\.bar\.getBoundingClientRect\(\)/);
-  assert.match(source, /className\s*=\s*"wf-preview-pane"/);
-  assert.match(source, /className\s*=\s*"wf-preview-pane-kicker"/);
-  assert.match(source, /className\s*=\s*"wf-preview-pane-drag"/);
-  assert.match(source, /drag\.addEventListener\("pointerdown",\s*startPreviewPaneDrag\)/);
-  assert.match(source, /actions\.appendChild\(drag\)[\s\S]*actions\.appendChild\(open\)[\s\S]*actions\.appendChild\(close\)/);
-  assert.match(source, /kicker\.textContent\s*=\s*"Preview"/);
-  assert.match(source, /classList\.add\("wf-branch-row-previewed"\)/);
-  assert.match(source, /classList\.remove\("wf-branch-row-previewed"\)/);
-  assert.match(source, /function startPreviewPaneDrag/);
-  assert.match(source, /function clampPreviewPanePosition/);
-  assert.match(source, /let previewManualPosition/);
   assert.match(source, /document\.createElement\("iframe"\)/);
-  assert.match(source, /frame\.src\s*=\s*entry\.url/);
-  assert.match(source, /callbacks\.onOpenInNewTab\(index\)/);
-  assert.match(source, /classList\.add\("wf-preview-pane-bottom"\)/);
-  assert.match(source, /className\s*=\s*"wf-menu-detail"/);
-  assert.match(source, /className\s*=\s*"wf-menu-detail-title"/);
-  assert.match(source, /className\s*=\s*"wf-menu-detail-url"/);
-  assert.match(source, /className\s*=\s*"wf-menu-detail-time"/);
-  assert.doesNotMatch(source, /buildMenuSectionLabel|wf-menu-section-label/);
-  assert.match(source, /Visited \$\{formatTrailTimestamp\(entry\.timestamp,\s*Date\.now\(\)\)\}/);
+  assert.match(source, /startFreePixelDrag/);
+  assert.match(source, /showContextMenu/);
   assert.match(
     source,
-    /label:\s*"Preview"[\s\S]*label:\s*"Open in new tab"[\s\S]*label:\s*"Open in new window"[\s\S]*label:\s*"Copy URL"/,
+    /label:\s*"Preview"[\s\S]*label:\s*"Open in new tab"[\s\S]*label:\s*"Open in new window"[\s\S]*label:\s*"Copy URL"[\s\S]*label:\s*"Save trail up to this point in path"/,
   );
-  assert.doesNotMatch(source, /positionPopover\(preview/);
-  assert.doesNotMatch(source, /onPreview\(|--wf-depth|MAX_BRANCH_DEPTH/);
-  assert.doesNotMatch(source, /wf-branch-label/);
+  assert.doesNotMatch(source, /function openLibraryPanel/);
   assert.doesNotMatch(source, /Copy as Markdown/);
+});
+
+test("saved trails panel owns library, name dialog, and path-tree preview", () => {
+  // Implementation is split across focused modules; the façade re-exports the public API.
+  const source = [
+    "savedTrailsPanel.ts",
+    "savedTrailsSession.ts",
+    "savedTrailsDialogs.ts",
+    "savedTrailsMutations.ts",
+    "savedTrailsTreePreview.ts",
+    "savedTrailsLibrary.ts",
+  ]
+    .map((name) => readSource(`src/lib/ui/panels/breadcrumbTrail/${name}`))
+    .join("\n");
+  const facade = readSource("src/lib/ui/panels/breadcrumbTrail/savedTrailsPanel.ts");
+  const client = readSource("src/lib/adapters/runtime/savedTrailsClient.ts");
+  assert.match(facade, /export function bindSavedTrailsHost/);
+  assert.match(facade, /export function toggleSavedTrailsLibrary/);
+  assert.match(facade, /export \{ openSaveTrailDialog \}/);
+  assert.match(source, /client\.save\(path,/);
+  assert.match(source, /client\.delete\(trail\.id\)/);
+  assert.doesNotMatch(source, /webextension-polyfill|browser\.storage|browser\.runtime/);
+  assert.match(client, /export interface SavedTrailsClient/);
+  assert.match(client, /browserSavedTrailsClient/);
+  assert.match(client, /subscribe:\s*subscribeToSavedTrails/);
+  assert.doesNotMatch(client, /duplicateNamedTrail|\bduplicate\s*\(/);
+  assert.match(source, /librarySession !== session \|\|/);
+  assert.match(source, /session\.loadRequest !== request/);
+  assert.match(source, /flushLiveTrailUpdates/);
+  assert.match(source, /openSavedTrailTreePreview/);
+  assert.match(source, /wf-trail-tree-preview/);
+  assert.match(source, /wf-library-panel/);
+  assert.match(source, /Save trail up to this point in path/);
+  assert.match(source, /label:\s*"Preview"/);
+  assert.match(source, /label:\s*"Remove trail"/);
+  assert.doesNotMatch(source, /label:\s*"Copy URL"/);
+  assert.match(source, /startFreePixelDrag/);
+  assert.match(source, /client\.open\(trail\.entries, mode\)/);
+  assert.match(source, /client\.subscribe\(savedTrailsChanged\)/);
+  assert.match(source, /Search trails…/);
+  assert.doesNotMatch(source, /wf-library-sort|SavedTrailsSortMode|getSortMode|setSortMode/);
+  assert.match(source, /offerDeleteUndo/);
+  assert.match(source, /createManagedDialogShell/);
+  assert.match(source, /openMutationDialog/);
+  assert.match(source, /SAVED_TRAIL_NAME_MAX_LENGTH/);
+  assert.match(source, /input\.maxLength = options\.input\.maxLength/);
+  assert.doesNotMatch(source, /window\.confirm/);
+});
+
+test("overlay drags retain pointer ownership inside the interaction boundary", () => {
+  const breadcrumb = readSource("src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.ts");
+  const freePixelDrag = readSource("src/lib/ui/panels/breadcrumbTrail/freePixelDrag.ts");
+  for (const source of [breadcrumb, freePixelDrag]) {
+    assert.match(source, /setPointerCapture\(pointerId\)/);
+    assert.match(source, /releasePointerCapture\(pointerId\)/);
+    assert.match(source, /moveEvent\.pointerId !== pointerId/);
+    assert.match(source, /endEvent\.pointerId === pointerId/);
+  }
 });
 
 test("panel host stays non-modal and never reclaims focus from the page", () => {
@@ -263,6 +336,8 @@ test("panel host stays non-modal and never reclaims focus from the page", () => 
     /lastFocusedInPanel|focusPreferredPanelTarget|pointerInteractionInPanel|host\.tabIndex/,
   );
   assert.doesNotMatch(source, /addEventListener\("focus|addEventListener\("visibilitychange/);
+  assert.doesNotMatch(source, /webextension-polyfill|browser\.runtime\.getURL/);
+  assert.match(source, /PANEL_EXTENSION_ORIGIN/);
 });
 
 test("trigger matcher rejects auto-repeat and untrusted events", () => {
@@ -284,10 +359,47 @@ test("runtime message contract declares all message literals", () => {
     "TRAIL_JUMP",
     "TRAIL_OPEN_IN_NEW_TAB",
     "TRAIL_OPEN_IN_NEW_WINDOW",
+    "SAVED_TRAIL_SAVE",
+    "SAVED_TRAIL_RENAME",
+    "SAVED_TRAIL_REPLACE",
+    "SAVED_TRAIL_SET_PINNED",
+    "SAVED_TRAIL_DELETE",
+    "SAVED_TRAIL_RESTORE",
+    "SAVED_TRAIL_OPEN",
     "TRAIL_OVERLAY_STATE",
     "TABTRAIL_OPEN_OPTIONS",
     "TABTRAIL_REFRESH_EXTENSION",
   ]) {
     assert.match(source, new RegExp(messageType), `contract must declare ${messageType}`);
   }
+});
+
+test("saved trail open sends a path so new tabs can inherit lineage", () => {
+  const contract = readSource("src/lib/common/contracts/runtimeMessages.ts");
+  const api = readSource("src/lib/adapters/runtime/tabtrailApi.ts");
+  assert.match(contract, /type: "SAVED_TRAIL_OPEN"; path: TrailEntry\[\]/);
+  assert.match(api, /type: "SAVED_TRAIL_OPEN",\s*path,/);
+  assert.doesNotMatch(api, /type: "SAVED_TRAIL_OPEN",\s*url,/);
+});
+
+test("saved trail management messages have typed wrappers and authoritative results", () => {
+  const contract = readSource("src/lib/common/contracts/runtimeMessages.ts");
+  const api = readSource("src/lib/adapters/runtime/tabtrailApi.ts");
+  const store = readSource("src/lib/adapters/storage/savedTrailsStore.ts");
+
+  assert.match(contract, /type: "SAVED_TRAIL_REPLACE";[\s\S]*expectedPath\?: TrailEntry\[\]/);
+  assert.match(contract, /type: "SAVED_TRAIL_RESTORE"; trail: SavedTrail/);
+  for (const wrapper of [
+    "renameNamedTrail",
+    "replaceNamedTrail",
+    "setNamedTrailPinned",
+    "deleteNamedTrail",
+    "restoreNamedTrail",
+  ]) {
+    assert.match(api, new RegExp(`function ${wrapper}\\(`));
+  }
+  assert.doesNotMatch(contract, /SAVED_TRAIL_DUPLICATE/);
+  assert.doesNotMatch(api, /duplicateNamedTrail|SAVED_TRAIL_DUPLICATE/);
+  assert.match(store, /previousTrail: SavedTrail/);
+  assert.match(store, /DeleteSavedTrailResult/);
 });

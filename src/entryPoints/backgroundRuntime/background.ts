@@ -10,13 +10,18 @@ import { migrateStorageIfNeeded } from "../../lib/common/utils/storageMigrations
 
 const trail = createTrailDomain();
 trail.registerLifecycleListeners();
+const storageMigration = migrateStorageIfNeeded();
+// Keep listeners synchronous at module load, but do not let a saved-trail
+// read-modify-write race a startup migration. A failed migration releases the
+// gate; the router/store will still surface any subsequent storage failure.
+const storageReady = storageMigration.then(() => undefined, () => undefined);
 
 registerRuntimeMessageRouter([
-  createTrailMessageHandler(trail),
+  createTrailMessageHandler(trail, storageReady),
 ]);
 
 async function bootstrapBackground(): Promise<void> {
-  const migration = await migrateStorageIfNeeded();
+  const migration = await storageMigration;
   if (migration.changed) {
     console.log(
       `[TabTrail] Storage migration applied (${migration.fromVersion} -> ${migration.toVersion}).`,
