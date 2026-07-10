@@ -1,7 +1,8 @@
-// Pure trail decision logic — no browser APIs, no imports. Covers the toggle
-// trigger matcher (keyboard or mouse chord), the trail reducer that turns
-// webNavigation events into breadcrumb state, and the jump planner. Side-effect
-// free so unit tests can exercise it without a browser.
+// Pure trail decision logic — no browser APIs. Covers the toggle trigger
+// matcher (keyboard or mouse chord), the trail reducer that turns webNavigation
+// events into breadcrumb state, and the jump planner. Side-effect free so unit
+// tests can exercise it without a browser. Named-trail library helpers live in
+// savedTrailCore.ts and are re-exported here for a stable import path.
 
 // Hard cap per tab: the oldest entries fall off. Deep rabbit holes stay usable
 // while a runaway SPA can't grow the trail without bound.
@@ -104,6 +105,7 @@ function makeEntry(event: TrailNavigationEvent): TrailEntry {
     transition: deriveTransition(event),
     redirected:
       hasQualifier(event, "client_redirect") || hasQualifier(event, "server_redirect"),
+    historyBacked: true,
   };
 }
 
@@ -154,7 +156,9 @@ export function applyNavigationEvent(
     return { state: { entries: [makeEntry(event)], cursor: 0 }, changed: true };
   }
 
-  // Landing of an extension-initiated breadcrumb jump: move the cursor only.
+  // Landing of an extension-initiated breadcrumb jump. A native history jump
+  // retains its forward stack; direct navigation establishes a new branch and
+  // drops descendants that no longer describe this tab's path.
   const jumpIndex = event.pendingJumpIndex;
   if (
     typeof jumpIndex === "number" &&
@@ -162,6 +166,21 @@ export function applyNavigationEvent(
     jumpIndex < entries.length &&
     entries[jumpIndex].url === event.url
   ) {
+    if (event.pendingJumpKind === "navigate") {
+      const branch = entries.slice(0, jumpIndex + 1);
+      // A plain tabs.update landing creates a new native-history entry rather
+      // than moving to the trail entry it represents. The abandoned native
+      // entries are no longer modeled by this branch, so the landing edge must
+      // break any later history.go span (including the jumpTo catch fallback).
+      branch[jumpIndex] = {
+        ...refreshEntry(branch[jumpIndex], event),
+        historyBacked: false,
+      };
+      return {
+        state: { entries: branch, cursor: branch.length - 1 },
+        changed: true,
+      };
+    }
     if (jumpIndex === cursor) return { state, changed: false };
     return { state: { entries, cursor: jumpIndex }, changed: true };
   }
@@ -197,8 +216,8 @@ export function applyNavigationEvent(
 
 // Plans how to fulfil a breadcrumb click. history.go(delta) preserves scroll
 // position and bfcache, but only when every hop in the span maps to a real
-// session-history entry — a redirect in the span replaced one, so fall back to
-// a plain navigation there. Returns null for a no-op (clicking the current
+// session-history entry. Redirected and inherited edges do not, so those spans
+// fall back to plain navigation. Returns null for a no-op (clicking the current
 // segment) or an invalid index.
 export function resolveJumpPlan(
   state: TrailState,
@@ -213,9 +232,10 @@ export function resolveJumpPlan(
   const low = Math.min(cursor, targetIndex);
   const high = Math.max(cursor, targetIndex);
   // Entries strictly after `low` were each created by a forward navigation; a
-  // redirect flag on any of them breaks the 1:1 mapping to history entries.
+  // redirect or inherited edge in the span breaks the 1:1 mapping to history
+  // entries.
   for (let index = low + 1; index <= high; index += 1) {
-    if (entries[index].redirected) {
+    if (entries[index].redirected || !entries[index].historyBacked) {
       return { kind: "navigate", url: entries[targetIndex].url };
     }
   }
@@ -281,6 +301,7 @@ export function normalizeTrailState(value: unknown): TrailState {
           : 0,
       transition: normalizeTrailTransition(entry.transition),
       redirected: entry.redirected === true,
+      historyBacked: entry.historyBacked !== false,
     });
   }
   if (entries.length === 0) return { entries: [], cursor: -1 };
@@ -288,3 +309,46 @@ export function normalizeTrailState(value: unknown): TrailState {
   if (cursor === -1) cursor = 0;
   return { entries, cursor };
 }
+
+// A new tab has only the endpoint in native session history. Preserve the
+// prefix as provenance, but mark every edge in that prefix as inherited so a
+// breadcrumb jump never mistakes it for a valid history.go span.
+export function createInheritedTrailState(path: TrailEntry[]): TrailState {
+  const normalized = normalizeTrailState({ entries: path, cursor: path.length - 1 });
+  if (normalized.entries.length === 0) return EMPTY_TRAIL_STATE;
+  return {
+    entries: normalized.entries.map((entry, index) => ({
+      ...entry,
+      historyBacked: index === 0,
+    })),
+    cursor: normalized.entries.length - 1,
+  };
+}
+
+// Path from the root through the selected node (inclusive). Null when the
+// index is out of range or the trail is empty. Shared by live open-in-new-*
+// and the saved-trail library.
+export function slicePathToIndex(state: TrailState, index: number): TrailEntry[] | null {
+  const { entries } = state;
+  if (!Number.isInteger(index) || index < 0 || index >= entries.length) return null;
+  return entries.slice(0, index + 1).map((entry) => ({ ...entry }));
+}
+
+// Re-export library helpers after live-trail definitions so savedTrailCore can
+// import normalizeTrailState without a circular-init race.
+export {
+  MAX_SAVED_TRAILS,
+  SAVED_TRAIL_NAME_MAX_LENGTH,
+  createSavedTrail,
+  createSavedTrailId,
+  isSavedTrailNameTaken,
+  normalizeSavedTrail,
+  normalizeSavedTrailEntries,
+  normalizeSavedTrailName,
+  normalizeSavedTrails,
+  savedTrailEndpoint,
+  savedTrailEntriesEqual,
+  savedTrailNameKey,
+  savedTrailPathsEqual,
+  suggestSavedTrailName,
+} from "./savedTrailCore";

@@ -53,6 +53,9 @@ interface TrailEntry {
   // True when this commit carried a redirect qualifier: the browser replaced a
   // history entry, so delta-based history.go across this entry is unreliable.
   redirected: boolean;
+  // Whether the edge from the preceding entry exists in this tab's native
+  // session history. False for lineage inherited when a new tab forks.
+  historyBacked: boolean;
 }
 
 // One tab's navigation trail. cursor points at the entry for the page the tab
@@ -64,7 +67,8 @@ interface TrailState {
 
 // Input to the pure trail reducer, assembled by the domain from a
 // webNavigation event. pendingJumpIndex is set when the extension itself
-// initiated the navigation by clicking a branch row.
+// initiated the navigation by clicking a branch row; pendingJumpKind tells the
+// reducer whether to retain a native forward stack or establish a new branch.
 interface TrailNavigationEvent {
   kind: "committed" | "historyState" | "refFragment";
   url: string;
@@ -72,6 +76,7 @@ interface TrailNavigationEvent {
   transitionType?: string;
   qualifiers?: string[];
   pendingJumpIndex?: number | null;
+  pendingJumpKind?: "historyGo" | "navigate" | null;
 }
 
 type TrailJumpPlan =
@@ -82,3 +87,16 @@ interface TabTrailActionResult {
   ok: boolean;
   reason?: string;
 }
+
+// A durable, user-named snapshot of a path segment (root → selected node).
+// Lives in storage.local until the user deletes it — unlike live session trails.
+interface SavedTrail {
+  id: string;
+  name: string;
+  pinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+  entries: TrailEntry[];
+}
+
+type SavedTrailOpenMode = "current" | "new";

@@ -58,6 +58,7 @@ function navEvent(url, overrides = {}) {
     transitionType: "link",
     qualifiers: [],
     pendingJumpIndex: null,
+    pendingJumpKind: null,
     ...overrides,
   };
 }
@@ -147,6 +148,7 @@ test("first navigation seeds the trail", async () => {
   assert.equal(changed, true);
   assert.deepEqual(urls(state), ["https://a.test/"]);
   assert.equal(state.cursor, 0);
+  assert.equal(state.entries[0].historyBacked, true);
 });
 
 test("plain link navigations append and advance the cursor", async () => {
@@ -233,6 +235,60 @@ test("pendingJump landing moves the cursor without appending", async () => {
   assert.deepEqual(urls(next), urls(state));
 });
 
+test("direct pendingJump establishes a branch and drops descendants", async () => {
+  const core = await loadTrailCoreModule();
+  const state = walk(core, ["https://a.test/", "https://b.test/", "https://c.test/"]);
+  const { state: branch } = core.applyNavigationEvent(
+    state,
+    navEvent("https://b.test/", {
+      pendingJumpIndex: 1,
+      pendingJumpKind: "navigate",
+      timestamp: 9000,
+    }),
+  );
+  assert.deepEqual(urls(branch), ["https://a.test/", "https://b.test/"]);
+  assert.equal(branch.cursor, 1);
+  assert.equal(branch.entries[1].timestamp, 9000);
+  assert.equal(branch.entries[1].historyBacked, false);
+  assert.deepEqual(
+    core.resolveJumpPlan(branch, 0),
+    { kind: "navigate", url: "https://a.test/" },
+  );
+});
+
+test("direct jump landing cannot reuse stale native history on the shortened branch", async () => {
+  const core = await loadTrailCoreModule();
+  let state = walk(core, ["https://a.test/", "https://b.test/"]);
+  state = core.applyNavigationEvent(
+    state,
+    navEvent("https://c.test/", { qualifiers: ["server_redirect"] }),
+  ).state;
+  state = core.applyNavigationEvent(state, navEvent("https://d.test/")).state;
+
+  // The redirected edge forces the click on B to use tabs.update rather than
+  // history.go. Native history now has abandoned C/D entries that this branch
+  // deliberately drops.
+  assert.deepEqual(
+    core.resolveJumpPlan(state, 1),
+    { kind: "navigate", url: "https://b.test/" },
+  );
+  state = core.applyNavigationEvent(
+    state,
+    navEvent("https://b.test/", {
+      pendingJumpIndex: 1,
+      pendingJumpKind: "navigate",
+      timestamp: 9000,
+    }),
+  ).state;
+
+  assert.deepEqual(urls(state), ["https://a.test/", "https://b.test/"]);
+  assert.equal(state.entries[1].historyBacked, false);
+  assert.deepEqual(
+    core.resolveJumpPlan(state, 0),
+    { kind: "navigate", url: "https://a.test/" },
+  );
+});
+
 test("pendingJump with a mismatched URL falls through to normal rules", async () => {
   const core = await loadTrailCoreModule();
   let state = walk(core, ["https://a.test/", "https://b.test/"]);
@@ -304,6 +360,32 @@ test("jump plan falls back to navigate across a redirected entry", async () => {
   assert.deepEqual(core.resolveJumpPlan(state, 0), { kind: "navigate", url: "https://a.test/" });
 });
 
+test("inherited lineage navigates safely and post-fork history remains native", async () => {
+  const core = await loadTrailCoreModule();
+  const source = walk(core, ["https://a.test/", "https://b.test/", "https://c.test/"]);
+  const inherited = core.createInheritedTrailState(source.entries);
+
+  assert.notEqual(inherited.entries, source.entries);
+  assert.deepEqual(urls(inherited), urls(source));
+  assert.deepEqual(
+    inherited.entries.map((entry) => entry.historyBacked),
+    [true, false, false],
+  );
+  assert.equal(inherited.cursor, 2);
+  assert.deepEqual(
+    core.resolveJumpPlan(inherited, 1),
+    { kind: "navigate", url: "https://b.test/" },
+  );
+
+  const extended = core.applyNavigationEvent(inherited, navEvent("https://x.test/")).state;
+  assert.equal(extended.entries[3].historyBacked, true);
+  assert.deepEqual(core.resolveJumpPlan(extended, 2), { kind: "historyGo", delta: -1 });
+  assert.deepEqual(
+    core.resolveJumpPlan(extended, 1),
+    { kind: "navigate", url: "https://b.test/" },
+  );
+});
+
 test("jump plan is null for the current segment and invalid indices", async () => {
   const core = await loadTrailCoreModule();
   const state = walk(core, ["https://a.test/", "https://b.test/"]);
@@ -346,5 +428,174 @@ test("normalizeTrailState heals malformed persisted values", async () => {
   assert.equal(healed.entries.length, 2);
   assert.equal(healed.entries[0].title, "");
   assert.equal(healed.entries[0].transition, "other");
+  assert.equal(healed.entries[0].historyBacked, true);
   assert.equal(healed.cursor, 1);
+
+  const inherited = core.normalizeTrailState({
+    entries: [
+      sampleEntry("https://a.test/"),
+      { ...sampleEntry("https://b.test/"), historyBacked: false },
+    ],
+    cursor: 1,
+  });
+  assert.deepEqual(inherited.entries.map((entry) => entry.historyBacked), [true, false]);
+});
+
+// --- named trail snapshots ---
+
+function sampleEntry(url, title = "") {
+  return {
+    url,
+    title,
+    favIconUrl: "",
+    timestamp: 1000,
+    transition: "link",
+    redirected: false,
+    historyBacked: true,
+  };
+}
+
+test("slicePathToIndex returns root through selected node", async () => {
+  const core = await loadTrailCoreModule();
+  const state = walk(core, ["https://a.test/", "https://b.test/", "https://c.test/"]);
+  const path = core.slicePathToIndex(state, 1);
+  assert.deepEqual(path.map((entry) => entry.url), ["https://a.test/", "https://b.test/"]);
+  assert.equal(core.slicePathToIndex(state, -1), null);
+  assert.equal(core.slicePathToIndex(state, 9), null);
+  assert.equal(core.slicePathToIndex(core.EMPTY_TRAIL_STATE, 0), null);
+});
+
+test("saved trail names are unique case-insensitively after trim", async () => {
+  const core = await loadTrailCoreModule();
+  const trails = [
+    core.createSavedTrail("My Path", [sampleEntry("https://a.test/", "A")]),
+  ];
+  assert.equal(core.isSavedTrailNameTaken(trails, "my path"), true);
+  assert.equal(core.isSavedTrailNameTaken(trails, "  MY PATH  "), true);
+  assert.equal(core.isSavedTrailNameTaken(trails, "Other"), false);
+  assert.equal(core.isSavedTrailNameTaken(trails, "My Path", trails[0].id), false);
+  assert.equal(core.normalizeSavedTrailName("  multi   space  "), "multi space");
+});
+
+test("normalizeSavedTrails drops invalid rows, enforces unique names and IDs, and caps", async () => {
+  const core = await loadTrailCoreModule();
+  const many = [];
+  for (let i = 0; i < core.MAX_SAVED_TRAILS + 5; i += 1) {
+    many.push({
+      id: `id-${i}`,
+      name: `Trail ${i}`,
+      createdAt: i,
+      updatedAt: i,
+      entries: [sampleEntry(`https://x.test/${i}`)],
+    });
+  }
+  many.push({ id: "bad", name: "", entries: [sampleEntry("https://bad.test/")] });
+  many.push({
+    id: "dup",
+    name: "Trail 0",
+    createdAt: 999,
+    updatedAt: 999,
+    entries: [sampleEntry("https://dup.test/")],
+  });
+  many.unshift({
+    id: "same-id",
+    name: "ID winner",
+    entries: [sampleEntry("https://winner.test/")],
+  });
+  many.unshift({
+    id: "same-id",
+    name: "Other ID winner",
+    entries: [sampleEntry("https://other-winner.test/")],
+  });
+  const normalized = core.normalizeSavedTrails(many);
+  assert.equal(normalized.length, core.MAX_SAVED_TRAILS);
+  assert.equal(normalized.filter((trail) => trail.name === "Trail 0").length, 1);
+  assert.equal(normalized.filter((trail) => trail.id === "same-id").length, 1);
+  assert.ok(normalized.every((trail) => trail.entries.length >= 1));
+  assert.ok(normalized.every((trail) => trail.pinned === false));
+});
+
+test("normalizeSavedTrails preserves legacy trails with duplicate navigation paths", async () => {
+  const core = await loadTrailCoreModule();
+  const path = [sampleEntry("https://a.test/?view=full#details")];
+  const first = core.createSavedTrail("First", path, 100);
+  const second = { ...core.createSavedTrail("Second", path, 200), id: "second" };
+  const normalized = core.normalizeSavedTrails([first, second]);
+  assert.equal(normalized.length, 2);
+  assert.deepEqual(normalized.map((trail) => trail.name), ["Second", "First"]);
+});
+
+test("saved trail path identity ignores cosmetic metadata but preserves navigation structure", async () => {
+  const core = await loadTrailCoreModule();
+  const path = [
+    sampleEntry("https://a.test/?mode=full#start", "Original A"),
+    sampleEntry("https://b.test/end", "Original B"),
+  ];
+  const cosmeticVariant = path.map((entry, index) => ({
+    ...entry,
+    title: `Changed ${index}`,
+    favIconUrl: `https://icons.test/${index}.png`,
+    timestamp: entry.timestamp + index + 10,
+    redirected: !entry.redirected,
+  }));
+
+  assert.equal(core.savedTrailPathsEqual(path, cosmeticVariant), true);
+  assert.equal(core.savedTrailEntriesEqual(path, cosmeticVariant), false);
+  assert.equal(core.savedTrailPathsEqual(path, path.slice(0, 1)), false);
+  assert.equal(core.savedTrailPathsEqual(path, [...path].reverse()), false);
+  assert.equal(
+    core.savedTrailPathsEqual(path, [
+      { ...path[0], url: "https://a.test/?mode=compact#start" },
+      path[1],
+    ]),
+    false,
+  );
+  assert.equal(
+    core.savedTrailPathsEqual(path, [
+      { ...path[0], url: "https://a.test/?mode=full#other" },
+      path[1],
+    ]),
+    false,
+  );
+  assert.equal(
+    core.savedTrailPathsEqual(path, [path[0], { ...path[1], transition: "typed" }]),
+    false,
+  );
+  assert.equal(
+    core.savedTrailPathsEqual(path, [path[0], { ...path[1], historyBacked: false }]),
+    false,
+  );
+});
+
+test("saved trails normalize pin state", async () => {
+  const core = await loadTrailCoreModule();
+  const source = core.createSavedTrail(
+    "A".repeat(core.SAVED_TRAIL_NAME_MAX_LENGTH),
+    [sampleEntry("https://a.test/")],
+    123,
+  );
+  assert.equal(source.pinned, false);
+  assert.equal(source.createdAt, 123);
+
+  const pinned = core.normalizeSavedTrail({ ...source, pinned: true });
+  assert.equal(pinned.pinned, true);
+  assert.equal(core.normalizeSavedTrail({ ...source, pinned: "yes" }).pinned, false);
+});
+
+test("suggestSavedTrailName prefers title then host", async () => {
+  const core = await loadTrailCoreModule();
+  assert.equal(
+    core.suggestSavedTrailName(sampleEntry("https://example.com/x", "Example Title")),
+    "Example Title",
+  );
+  assert.equal(core.suggestSavedTrailName(sampleEntry("https://example.com/x")), "example.com");
+});
+
+test("savedTrailEndpoint returns the last entry", async () => {
+  const core = await loadTrailCoreModule();
+  const trail = core.createSavedTrail("T", [
+    sampleEntry("https://a.test/"),
+    sampleEntry("https://b.test/", "B"),
+  ]);
+  assert.equal(core.savedTrailEndpoint(trail)?.url, "https://b.test/");
 });

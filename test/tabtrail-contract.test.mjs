@@ -64,3 +64,9 @@ test("visible row settings clamp to the supported overlay range", async () => {
   assert.equal(aboveRange.maxVisibleSegments, 12);
   assert.equal(invalid.maxVisibleSegments, contract.DEFAULT_TABTRAIL_SETTINGS.maxVisibleSegments);
 });
+
+test("legacy saved-trail sort preferences are discarded", async () => {
+  const contract = await loadTabTrailContractModule();
+  const normalized = contract.normalizeTabTrailSettings({ savedTrailsSort: "name" });
+  assert.equal("savedTrailsSort" in normalized, false);
+});

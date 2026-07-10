@@ -12,6 +12,8 @@ export const EXTENSION_TITLE = "Current Tab History - In-Page Trail";
 
 export const TABTRAIL_STORAGE_KEYS = {
   settings: "tabtrailSettings",
+  // Durable named path snapshots (library). Distinct from session trail mirrors.
+  savedTrails: "tabtrailSavedTrails",
 } as const;
 
 // Per-tab trail mirrors live under this prefix in session storage (or in
@@ -163,3 +165,6 @@ export async function saveTabTrailSettings(settings: TabTrailSettings): Promise<
     [TABTRAIL_STORAGE_KEYS.settings]: normalizeTabTrailSettings(settings),
   });
 }
+
+// Named trail I/O lives in adapters/storage/savedTrailsStore.ts (load/save/delete
+// with normalizers). Only the storage key is declared here.
