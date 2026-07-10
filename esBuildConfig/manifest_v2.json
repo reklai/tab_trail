@@ -3,6 +3,7 @@
   "name": "Current Tab History - In-Page Trail",
   "version": "1.0.0",
   "description": "Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.",
+  "incognito": "spanning",
   "browser_specific_settings": {
     "gecko": {
       "id": "@tabtrail.reklai",
@@ -29,6 +30,9 @@
       "match_about_blank": true,
       "run_at": "document_start"
     }
+  ],
+  "web_accessible_resources": [
+    "overlayFrame/overlayFrame.html"
   ],
   "options_ui": {
     "page": "optionsPage/optionsPage.html",

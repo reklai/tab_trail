@@ -34,6 +34,7 @@ const shared = {
 const entryPoints = [
   { in: resolve(root, "src/entryPoints/backgroundRuntime/background.ts"), out: "background" },
   { in: resolve(root, "src/entryPoints/contentScript/contentScript.ts"), out: "contentScript" },
+  { in: resolve(root, "src/entryPoints/overlayFrame/overlayFrame.ts"), out: "overlayFrame/overlayFrame" },
   { in: resolve(root, "src/entryPoints/toolbarPopup/toolbarPopup.ts"), out: "toolbarPopup/toolbarPopup" },
   { in: resolve(root, "src/entryPoints/optionsPage/optionsPage.ts"), out: "optionsPage/optionsPage" },
 ];
@@ -41,6 +42,8 @@ const entryPoints = [
 // Static assets to copy into dist/ (manifests live in esBuildConfig/, sources in src/)
 const staticFiles = [
   { from: resolve(__dirname, manifestFile), to: "manifest.json" },
+  { from: resolve(root, "src/entryPoints/overlayFrame/overlayFrame.html"), to: "overlayFrame/overlayFrame.html", branded: true },
+  { from: resolve(root, "src/entryPoints/overlayFrame/overlayFrame.css"), to: "overlayFrame/overlayFrame.css" },
   { from: resolve(root, "src/entryPoints/toolbarPopup/toolbarPopup.html"), to: "toolbarPopup/toolbarPopup.html", branded: true },
   { from: resolve(root, "src/entryPoints/toolbarPopup/toolbarPopup.css"), to: "toolbarPopup/toolbarPopup.css", branded: true },
   { from: resolve(root, "src/entryPoints/optionsPage/optionsPage.html"), to: "optionsPage/optionsPage.html", branded: true },

@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.",
   "minimum_chrome_version": "89",
+  "incognito": "split",
   "permissions": [
     "webNavigation",
     "tabs",
@@ -23,6 +24,13 @@
       "all_frames": true,
       "match_about_blank": true,
       "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["overlayFrame/overlayFrame.html"],
+      "matches": ["<all_urls>"],
+      "use_dynamic_url": false
     }
   ],
   "options_ui": {

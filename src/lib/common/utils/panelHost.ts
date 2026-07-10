@@ -2,8 +2,6 @@
 // markup and styles stay separate from the page. Panels are non-modal: the
 // page keeps focus except while an explicit panel control is being used.
 
-import browser from "webextension-polyfill";
-
 export interface PanelHost {
   host: HTMLDivElement;
   shadow: ShadowRoot;
@@ -38,17 +36,32 @@ function handlePanelRuntimeFault(label: string, reason: unknown): void {
   dismissPanel();
 }
 
-const EXTENSION_BASE_URL = browser.runtime.getURL("");
+const EXTENSION_ORIGIN_PATTERN = /(?:chrome|moz|safari-web)-extension:\/\/[^/\s)]+/i;
+
+function extensionOriginIn(value: string): string | null {
+  return value.match(EXTENSION_ORIGIN_PATTERN)?.[0] ?? null;
+}
+
+// Capture this bundle's extension origin without calling a privileged runtime
+// API. Stack URLs are present in extension content scripts in both Chromium
+// and Firefox; the scheme fallback keeps fail-safe handling available when a
+// browser omits the initialization stack URL.
+const PANEL_EXTENSION_ORIGIN = extensionOriginIn(new Error().stack ?? "");
+
+function valueLooksExtensionScoped(value: string): boolean {
+  if (PANEL_EXTENSION_ORIGIN) return value.includes(PANEL_EXTENSION_ORIGIN);
+  return EXTENSION_ORIGIN_PATTERN.test(value);
+}
 
 function reasonLooksExtensionScoped(reason: unknown): boolean {
   if (!reason) return false;
-  if (typeof reason === "string") return reason.includes(EXTENSION_BASE_URL);
+  if (typeof reason === "string") return valueLooksExtensionScoped(reason);
   if (typeof reason === "object") {
     const maybeError = reason as { stack?: unknown; message?: unknown };
-    if (typeof maybeError.stack === "string" && maybeError.stack.includes(EXTENSION_BASE_URL)) {
+    if (typeof maybeError.stack === "string" && valueLooksExtensionScoped(maybeError.stack)) {
       return true;
     }
-    if (typeof maybeError.message === "string" && maybeError.message.includes(EXTENSION_BASE_URL)) {
+    if (typeof maybeError.message === "string" && valueLooksExtensionScoped(maybeError.message)) {
       return true;
     }
   }
@@ -56,7 +69,7 @@ function reasonLooksExtensionScoped(reason: unknown): boolean {
 }
 
 function isPanelRuntimeFaultFromExtension(event: ErrorEvent): boolean {
-  if (typeof event.filename === "string" && event.filename.startsWith(EXTENSION_BASE_URL)) {
+  if (typeof event.filename === "string" && valueLooksExtensionScoped(event.filename)) {
     return true;
   }
   if (reasonLooksExtensionScoped(event.error)) return true;
@@ -85,7 +98,7 @@ export function createPanelHost(): PanelHost {
   const host = document.createElement("div");
   host.id = "ht-panel-host";
   host.style.cssText =
-    "position:fixed;inset:0;z-index:2147483647;pointer-events:auto;overscroll-behavior:contain;isolation:isolate;";
+    "position:fixed;inset:0;z-index:2147483647;pointer-events:auto;overflow:hidden;overscroll-behavior:none;isolation:isolate;";
   const shadow = host.attachShadow({ mode: "open" });
   document.body.appendChild(host);
 

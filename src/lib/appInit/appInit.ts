@@ -15,19 +15,12 @@ import { ContentRuntimeMessage } from "../common/contracts/runtimeMessages";
 import { matchesToggleTrigger } from "../core/trail/trailCore";
 import type { ToggleTriggerEvent } from "../core/trail/trailCore";
 import {
-  jumpToTrailEntry,
-  openTrailEntryInNewTab,
-  openTrailEntryInNewWindow,
-  openTabTrailOptions,
-  reportTrailOverlayState,
   toggleTrailOverlay,
 } from "../adapters/runtime/tabtrailApi";
 import {
-  hideBreadcrumbTrail,
-  isBreadcrumbTrailOpen,
-  showBreadcrumbTrail,
-  updateBreadcrumbTrail,
-} from "../ui/panels/breadcrumbTrail/breadcrumbTrail";
+  createOverlayFrameController,
+  type OverlayFrameController,
+} from "../ui/overlayFrame/overlayFrameController";
 
 declare global {
   interface Window {
@@ -57,9 +50,12 @@ export function initApp(): void {
   const topFrame = isTopFrame();
   let swallowMouseUntil = 0;
   let swallowedButton = -1;
+  let overlayController: OverlayFrameController | null = null;
 
   void loadTabTrailSettings().then((loaded) => {
-    if (!disposed) settings = loaded;
+    if (disposed) return;
+    settings = loaded;
+    overlayController?.updateSettings(settings);
   });
 
   // --- Chord capture (all frames) ---
@@ -137,6 +133,7 @@ export function initApp(): void {
   ): void => {
     if (areaName !== "local" || !changes[TABTRAIL_STORAGE_KEYS.settings]) return;
     settings = normalizeTabTrailSettings(changes[TABTRAIL_STORAGE_KEYS.settings].newValue);
+    overlayController?.updateSettings(settings);
   };
   browser.storage.onChanged.addListener(storageChangedHandler);
 
@@ -149,40 +146,16 @@ export function initApp(): void {
   let visibilityChangeHandler: (() => void) | null = null;
 
   if (topFrame) {
-    const closeOpenOverlay = (): void => {
-      if (!isBreadcrumbTrailOpen()) return;
-      hideBreadcrumbTrail();
-    };
+    overlayController = createOverlayFrameController({
+      onPositionChange: async (position) => {
+        settings = { ...settings, overlayPosition: position };
+        overlayController?.updateSettings(settings);
+        await saveTabTrailSettings(settings);
+      },
+    });
 
-    const openOverlay = (state: TrailState): void => {
-      showBreadcrumbTrail(state, {
-        settings,
-        // Every callback swallows its own rejection on purpose. If the
-        // background is briefly unreachable and one of these rejects, an
-        // unhandled rejection would reach panelHost's global handler, which
-        // reads any extension-scoped fault as fatal and closes the overlay.
-        callbacks: {
-          onJump: (index) => {
-            void jumpToTrailEntry(index).catch(() => {});
-          },
-          onOpenInNewTab: (index) => {
-            void openTrailEntryInNewTab(index).catch(() => {});
-          },
-          onOpenInNewWindow: (index) => {
-            void openTrailEntryInNewWindow(index).catch(() => {});
-          },
-          onOpenOptions: () => {
-            void openTabTrailOptions().catch(() => {});
-          },
-          onClose: () => {
-            void reportTrailOverlayState(false).catch(() => {});
-          },
-          onPositionChange: (position) => {
-            void saveTabTrailSettings({ ...settings, overlayPosition: position }).catch(() => {});
-          },
-        },
-      });
-      void reportTrailOverlayState(true).catch(() => {});
+    const closeOpenOverlay = (): void => {
+      overlayController?.close();
     };
 
     messageHandler = (message: unknown): Promise<unknown> | undefined => {
@@ -191,15 +164,22 @@ export function initApp(): void {
       switch (typed.type) {
         case "TABTRAIL_PING":
           return Promise.resolve({ ok: true });
+        case "OVERLAY_FRAME_CHALLENGE":
+          return Promise.resolve(overlayController?.authorizeClaim(typed.nonce) ?? {
+            ok: false,
+            reason: "Overlay frame unavailable",
+          });
         case "TRAIL_SHOW":
-          if (isBreadcrumbTrailOpen()) {
-            hideBreadcrumbTrail();
-          } else {
-            openOverlay(typed.state);
+          if (overlayController?.isOpen()) {
+            overlayController.close("Overlay toggled closed");
+            return Promise.resolve({ ok: true });
           }
-          return Promise.resolve({ ok: true });
+          return (overlayController?.open(typed.state, settings) ?? Promise.resolve(false))
+            .then((opened) => opened
+              ? { ok: true }
+              : { ok: false, reason: "Overlay unavailable on this page" });
         case "TRAIL_UPDATED":
-          if (isBreadcrumbTrailOpen()) updateBreadcrumbTrail(typed.state);
+          overlayController?.updateTrail(typed.state);
           return Promise.resolve({ ok: true });
         case "HISTORY_GO":
           try {
@@ -236,7 +216,8 @@ export function initApp(): void {
     if (visibilityChangeHandler) {
       document.removeEventListener("visibilitychange", visibilityChangeHandler);
     }
-    if (isBreadcrumbTrailOpen()) hideBreadcrumbTrail();
+    overlayController?.close("Content script stopped");
+    overlayController = null;
     delete window.__tabtrailCleanup;
   };
 }

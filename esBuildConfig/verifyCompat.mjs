@@ -40,6 +40,7 @@ const manifestV3 = loadJson("manifest_v3.json");
 
 const errors = [];
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
+const OVERLAY_FRAME_RESOURCE = "overlayFrame/overlayFrame.html";
 
 if (!SEMVER_RE.test(String(manifestV2.version || "")) || !SEMVER_RE.test(String(manifestV3.version || ""))) {
   errors.push("Both manifests must use a semver version string (x.y.z).");
@@ -66,6 +67,9 @@ if (!hasAll(manifestV2.permissions || [], requiredV2Permissions)) {
 if (!hasNone(manifestV2.permissions || [], ["tabGroups", "scripting", "tabHide", "sessions"])) {
   errors.push("MV2 must not declare Chrome-only (scripting, tabGroups) or retired (tabHide, sessions) permissions.");
 }
+if (manifestV2.incognito !== "spanning") {
+  errors.push('MV2 must use "spanning" incognito mode; Firefox does not support split mode.');
+}
 
 const geckoSettings = manifestV2.browser_specific_settings?.gecko;
 if (!geckoSettings?.id || typeof geckoSettings.id !== "string") {
@@ -89,9 +93,40 @@ if (!hasAll(manifestV3.permissions || [], requiredV3Permissions)) {
 if (!hasNone(manifestV3.permissions || [], ["tabHide", "sessions", "tabGroups"])) {
   errors.push("MV3 must not declare Firefox-only (tabHide, sessions) or retired (tabGroups) permissions.");
 }
+if (manifestV3.incognito !== "split") {
+  errors.push('MV3 must use "split" incognito mode so Chrome can load the extension overlay frame in incognito tabs.');
+}
 
 if (!hasAll(manifestV3.host_permissions || [], ["<all_urls>"])) {
   errors.push("MV3 host_permissions must include <all_urls> for content script coverage.");
+}
+
+const v2WebResources = manifestV2.web_accessible_resources;
+if (
+  !Array.isArray(v2WebResources) ||
+  v2WebResources.length !== 1 ||
+  v2WebResources[0] !== OVERLAY_FRAME_RESOURCE
+) {
+  errors.push(`MV2 must expose only ${OVERLAY_FRAME_RESOURCE} as a web-accessible resource.`);
+}
+
+const v3WebResources = manifestV3.web_accessible_resources;
+const v3OverlayResource = Array.isArray(v3WebResources) && v3WebResources.length === 1
+  ? v3WebResources[0]
+  : null;
+if (
+  !v3OverlayResource ||
+  !Array.isArray(v3OverlayResource.resources) ||
+  v3OverlayResource.resources.length !== 1 ||
+  v3OverlayResource.resources[0] !== OVERLAY_FRAME_RESOURCE ||
+  !Array.isArray(v3OverlayResource.matches) ||
+  v3OverlayResource.matches.length !== 1 ||
+  v3OverlayResource.matches[0] !== "<all_urls>" ||
+  v3OverlayResource.use_dynamic_url !== false
+) {
+  errors.push(
+    `MV3 must expose only ${OVERLAY_FRAME_RESOURCE} to <all_urls> through a stable extension URL.`,
+  );
 }
 
 const suggestedCount = countSuggestedCommands(manifestV3.commands);
@@ -166,12 +201,16 @@ for (const [name, manifest] of [
 const requiredSourceFiles = [
   "src/entryPoints/contentScript/contentScript.ts",
   "src/entryPoints/backgroundRuntime/background.ts",
+  "src/entryPoints/overlayFrame/overlayFrame.ts",
+  "src/entryPoints/overlayFrame/overlayFrame.html",
+  "src/entryPoints/overlayFrame/overlayFrame.css",
   "src/entryPoints/optionsPage/optionsPage.html",
   "src/entryPoints/optionsPage/optionsPage.css",
   "src/entryPoints/toolbarPopup/toolbarPopup.html",
   "src/entryPoints/toolbarPopup/toolbarPopup.css",
   "src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.ts",
   "src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.css",
+  "src/lib/ui/panels/breadcrumbTrail/savedTrailsPanel.css",
   ...pngAssets.map((asset) => asset.path),
 ];
 for (const requiredFile of requiredSourceFiles) {
