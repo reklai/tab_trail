@@ -59,7 +59,8 @@
         <h2>Good to know</h2>
         <ul class="limitations">
           <li>On browser pages (<code>about:</code>, <code>chrome://</code>, add-on stores) the shortcut can't run; use the toolbar popup to adjust the shortcut or open settings.</li>
-          <li>Trails are session-only by design: they live in session storage, never touch the network, and clear when the browser closes.</li>
+          <li>Live trails are session-only and clear when the browser closes. Named saved trails persist locally; neither is sent over the network.</li>
+          <li>Saved trail names and complete navigation trees must be unique. Shorter or longer versions of a path can still be saved separately.</li>
           <li>Each tab keeps its most recent 100 pages; jumping back and branching off drops the abandoned forward entries, just like browser history.</li>
         </ul>
       </section>

@@ -26,7 +26,11 @@ GitHub issues, or research links and need to recover your place quickly.
 - Jump back to any trail entry.
 - Open entries in a new tab or window.
 - Copy any trail URL.
-- Keep trails session-only; they clear when the browser closes.
+- Save important paths locally, then fuzzy-search, pin, update, rename,
+  preview, or reopen them later.
+- Saved trail names and complete navigation trees must be unique; shorter or
+  longer versions of a path can still be saved separately.
+- Keep live trails session-only; named paths persist only when you save them.
 
 In-Page Trail is focused on in-tab navigation history. It is not a full tab manager,
 session restore tool, bookmark manager, or closed-tab recovery extension.
@@ -44,8 +48,8 @@ shortcut and open settings.
   pushState and hash changes) to build the trail. Titles and URLs only.
 - `tabs` - read tab titles/favicons for trail entries and navigate the tab when
   you click a trail row.
-- `storage` - save your settings locally and mirror trails in session storage
-  (cleared when the browser closes).
+- `storage` - save your settings and named saved paths locally, and mirror live
+  trails in session storage (cleared when the browser closes).
 - `scripting` - (Chrome) re-inject the content script into open tabs after
   install/update so the shortcut works without reloading pages.
 - `<all_urls>` - run the content script that captures configurable shortcuts and
