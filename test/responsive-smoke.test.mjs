@@ -11,25 +11,40 @@ function readText(pathFromRoot) {
 
 test("branch overlay includes mobile tightening and scroll containment", () => {
   const css = readText("src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.css");
+  const savedCss = readText("src/lib/ui/panels/breadcrumbTrail/savedTrailsPanel.css");
   assert.match(css, /@media \(max-width:/);
   assert.match(css, /border-radius:\s*8px/);
   assert.match(css, /\.wf-branch-list\s*\{[\s\S]*overflow-y:\s*auto/);
   assert.match(css, /\.wf-bar\s*\{[\s\S]*overflow:\s*visible/);
   assert.match(css, /\.wf-branch-header\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0,\s*1fr\) auto auto/);
-  assert.match(css, /\.wf-settings\s*\{[\s\S]*width:\s*22px/);
+  assert.match(css, /\.wf-settings,\s*\n\.wf-library\s*\{[\s\S]*width:\s*22px/);
+  assert.match(savedCss, /\.wf-library-list\s*\{[\s\S]*overflow-y:\s*auto/);
+  assert.match(savedCss, /\.wf-library-panel\s*\{[\s\S]*box-sizing:\s*border-box/);
+  assert.match(savedCss, /\.wf-library-pin\s*\{/);
+  assert.match(savedCss, /\.wf-library-tools\s*\{/);
+  assert.match(css, /\.wf-notice\s*\{[\s\S]*position:\s*fixed/);
   assert.match(css, /\.wf-grip\s*\{[\s\S]*rgba\(254,188,46/);
   assert.match(css, /\.wf-close\s*\{[\s\S]*rgba\(255,95,87/);
   assert.match(css, /\.wf-branch-row\s*\{[\s\S]*color:\s*#d6d6d6/);
-  assert.match(css, /\.wf-branch-row\s*\{[\s\S]*grid-template-columns:\s*14px minmax\(0,\s*1fr\) auto/);
+  assert.match(css, /\.wf-branch-row-main\s*\{[\s\S]*grid-template-columns:\s*14px minmax\(0,\s*1fr\)/);
   assert.match(css, /\.wf-branch-row\s*\{[\s\S]*margin:\s*2px 0/);
   assert.match(css, /\.wf-row-more\s*\{[\s\S]*width:\s*28px[\s\S]*height:\s*28px/);
   assert.match(css, /\.wf-branch-row-current\s*\{[\s\S]*rgba\(10,132,255/);
+  assert.match(css, /\.wf-bar-blocked\s*\{[^}]*background:\s*#101010/);
+  assert.doesNotMatch(css, /\.wf-bar-blocked\s*\{[^}]*opacity:/);
+  assert.match(css, /\.wf-bar-blocked \.wf-branch-header\s*\{[^}]*background:\s*#121212/);
+  assert.match(
+    css,
+    /\.wf-bar-blocked \.wf-branch-row-current\s*\{[^}]*background:\s*#151515/,
+  );
   assert.match(css, /\.wf-branch-row-current \.wf-branch-node\s*\{[\s\S]*#30d158/);
+  assert.match(css, /\.wf-branch-row-fork \.wf-branch-node\s*\{[\s\S]*outline:/);
   assert.match(css, /\.wf-branch-row-previewed\s*\{[\s\S]*#ffb340/);
   assert.match(css, /\.wf-branch-entry-title\s*\{[\s\S]*-webkit-line-clamp:\s*2/);
   assert.match(css, /\.wf-branch-entry-url\s*\{[\s\S]*text-overflow:\s*ellipsis/);
   assert.match(css, /\.wf-branch-connector::before\s*\{/);
   assert.match(css, /\.wf-branch-connector::after\s*\{/);
+  assert.match(css, /\.wf-branch-connector-inherited\s*\{[\s\S]*opacity:/);
   assert.match(css, /\.wf-branch-connector\s*\{[\s\S]*margin:\s*3px 0 3px 6px/);
   assert.match(css, /\.wf-more\s*\{[\s\S]*margin-left:\s*12px/);
   assert.match(css, /\.wf-more-collapse\s*\{[\s\S]*margin-top:\s*4px/);
@@ -40,6 +55,9 @@ test("branch overlay includes mobile tightening and scroll containment", () => {
   assert.match(css, /\.wf-preview-pane-dragging\s*\{/);
   assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*\.wf-preview-pane\s*\{[\s\S]*width:\s*calc\(100vw - 24px\)/);
   assert.match(css, /\.wf-menu\s*\{[\s\S]*z-index:\s*14/);
+  assert.match(css, /\.wf-menu\s*\{[^}]*box-sizing:\s*border-box/);
+  assert.match(css, /\.wf-menu\s*\{[^}]*max-height:\s*calc\(100vh - 16px\)/);
+  assert.match(css, /\.wf-menu\s*\{[^}]*overflow-y:\s*auto/);
   assert.doesNotMatch(css, /\.wf-menu-section-label/);
   assert.match(css, /\.wf-menu-detail\s*\{[\s\S]*background:\s*var\(--ht-color-surface-dim\)/);
   assert.match(css, /\.wf-menu-detail\s*\{[\s\S]*border:\s*1px solid var\(--ht-color-border-soft\)/);

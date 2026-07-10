@@ -16,18 +16,38 @@ test("CONTRIBUTING references the release, store, and privacy docs", () => {
   }
 });
 
-test("README documents the trigger, the tracking API, and the session-only model", () => {
+test("README documents the trigger, tracking, and saved-trail persistence model", () => {
   const readme = readText("README.md");
   assert.match(readme, /Alt \+ H/);
   assert.match(readme, /webNavigation/);
-  assert.match(readme, /session/i);
+  assert.match(readme, /Live trails are session-only/);
+  assert.match(readme, /named saved trails.*persist/is);
+  assert.match(readme, /complete navigation trees must be unique/i);
+  assert.match(readme, /shorter\s+or longer versions of a path can still be saved separately/i);
+  assert.doesNotMatch(readme, /\bduplicate\b/i);
   assert.match(readme, /toolbar\s+popup/i);
   assert.match(readme, /Works on Firefox, Chrome, and Zen Browser/);
+});
+
+test("store and options copy describe saved-trail persistence and uniqueness", () => {
+  const store = readText("STORE.md");
+  const options = readText("src/entryPoints/optionsPage/optionsPage.html");
+  assert.match(store, /complete navigation trees must be unique/i);
+  assert.doesNotMatch(store, /\bduplicate\b/i);
+  assert.match(
+    options,
+    /Live trails are session-only and clear when the browser closes\. Named saved trails persist locally; neither is sent over the network\./,
+  );
+  assert.match(
+    options,
+    /Saved trail names and complete navigation trees must be unique\. Shorter or longer versions of a path can still be saved separately\./,
+  );
 });
 
 test("PRIVACY documents the stored keys and the no-collection stance", () => {
   const privacy = readText("PRIVACY.md");
   assert.match(privacy, /tabtrailSettings/);
+  assert.match(privacy, /tabtrailSavedTrails/);
   assert.match(privacy, /tabtrailTrail:/);
   assert.match(privacy, /storageSchemaVersion/);
   assert.match(privacy, /does not collect, transmit, or share/);

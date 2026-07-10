@@ -65,6 +65,32 @@ test("chrome manifest can observe navigations and re-inject content scripts", ()
   assert.ok(v3.host_permissions.includes("<all_urls>"));
 });
 
+test("manifests expose only the isolated overlay document with compatible incognito modes", () => {
+  const v2 = readJson("esBuildConfig/manifest_v2.json");
+  const v3 = readJson("esBuildConfig/manifest_v3.json");
+
+  assert.equal(v2.incognito, "spanning");
+  assert.deepEqual(v2.web_accessible_resources, ["overlayFrame/overlayFrame.html"]);
+
+  assert.equal(v3.incognito, "split");
+  assert.deepEqual(v3.web_accessible_resources, [{
+    resources: ["overlayFrame/overlayFrame.html"],
+    matches: ["<all_urls>"],
+    use_dynamic_url: false,
+  }]);
+});
+
+test("overlay frame document loads only packaged external assets", () => {
+  const html = readFileSync(
+    resolve(root, "src/entryPoints/overlayFrame/overlayFrame.html"),
+    "utf8",
+  );
+  assert.match(html, /<link rel="stylesheet" href="overlayFrame\.css">/);
+  assert.match(html, /<script src="overlayFrame\.js" defer><\/script>/);
+  assert.doesNotMatch(html, /<script(?:\s|>)(?![^>]*\bsrc=)/);
+  assert.doesNotMatch(html, /<style(?:\s|>)/);
+});
+
 test("manifests omit the retired single-slot permissions", () => {
   const v2 = readJson("esBuildConfig/manifest_v2.json");
   const v3 = readJson("esBuildConfig/manifest_v3.json");

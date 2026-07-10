@@ -20,6 +20,7 @@ const OVERLAY_TS_FILES = [
 
 const OVERLAY_CSS_FILES = [
   "src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.css",
+  "src/lib/ui/panels/breadcrumbTrail/savedTrailsPanel.css",
 ];
 
 const DISALLOWED_IDENTIFIER_PATTERNS = [
