@@ -47,7 +47,11 @@ export function createCurrentVersionMigrationResult(): StorageMigrationResult {
 function renameWayfindKeys(storage: StorageSnapshot): boolean {
   let changed = false;
   if ("wayfindSettings" in storage) {
-    storage["tabtrailSettings"] = storage["wayfindSettings"];
+    // Destination wins so a retry cannot overwrite settings already written
+    // by the current build after an interrupted migration.
+    if (!("tabtrailSettings" in storage)) {
+      storage["tabtrailSettings"] = storage["wayfindSettings"];
+    }
     delete storage["wayfindSettings"];
     changed = true;
   }
