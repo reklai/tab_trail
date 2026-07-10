@@ -1,20 +1,45 @@
 // Compact vertical branch overlay showing the tab's navigation trail. Built
 // on the shared Shadow DOM panel host so it stays isolated from page styles,
-// but deliberately NON-modal: the host is click-through outside the bar, and
-// the page keeps keyboard focus outside explicit controls. Rows are clicked to
-// jump, opened through the right-side details button or right-clicked for a
-// small in-shadow menu, and the bar is dragged by its handle to reposition
-// (position persisted via a callback).
+// but deliberately NON-modal. Saved-trails library/name/tree UI lives in
+// savedTrailsPanel.ts; this file hosts the live bar, iframe preview, and menus.
 
 import styles from "./breadcrumbTrail.css";
+import savedTrailStyles from "./savedTrailsPanel.css";
+import {
+  browserSavedTrailsClient,
+  type SavedTrailsClient,
+} from "../../../adapters/runtime/savedTrailsClient";
 import {
   createPanelHost,
   dismissPanel,
   getBaseStyles,
   registerPanelCleanup,
 } from "../../../common/utils/panelHost";
-import { extractDomain } from "../../../common/utils/helpers";
 import { formatTrailTimestamp } from "../../../core/trail/trailCore";
+import { showContextMenu } from "./contextMenu";
+import { clampInViewport, startFreePixelDrag } from "./freePixelDrag";
+import { scheduleFocusWhenIdle } from "./focusRestore";
+import { installOverlayInteractionShield } from "./interactionShield";
+import {
+  closeAllOverlaySurfaces,
+  closeOverlaySurface,
+  closeTopOverlaySurface,
+  dropOverlaySurface,
+  isOverlaySurfaceBlockingLiveRender,
+  pushOverlaySurface,
+} from "./overlaySurfaces";
+import {
+  bindSavedTrailsHost,
+  openSaveTrailDialog,
+  toggleSavedTrailsLibrary,
+  unbindSavedTrailsHost,
+} from "./savedTrailsPanel";
+import type { SavedTrailsNoticeOptions } from "./savedTrailsPanel";
+import {
+  branchConnectorElement,
+  entryTitle,
+  entryUrlSubtitle,
+} from "./trailPresentation";
 
 export interface BreadcrumbTrailCallbacks {
   onJump(index: number): void;
@@ -28,6 +53,8 @@ export interface BreadcrumbTrailCallbacks {
 export interface BreadcrumbTrailOptions {
   settings: TabTrailSettings;
   callbacks: BreadcrumbTrailCallbacks;
+  /** Persistence/navigation gateway; injectable for isolated rendering hosts. */
+  savedTrailsClient?: SavedTrailsClient;
 }
 
 const DEFAULT_POSITION: TabTrailOverlayPosition = { xPercent: 50, yPercent: 8 };
@@ -45,9 +72,14 @@ interface OverlaySession {
   state: TrailState;
   expanded: boolean;
   position: TabTrailOverlayPosition;
+  noticeStack: HTMLDivElement;
+  statusNoticeCleanup: (() => void) | null;
+  undoNoticeCleanups: Set<() => void>;
+  liveRenderPending: boolean;
 }
 
 let session: OverlaySession | null = null;
+let mainDragStop: (() => void) | null = null;
 
 export function isBreadcrumbTrailOpen(): boolean {
   return session !== null;
@@ -61,16 +93,35 @@ export function hideBreadcrumbTrail(): void {
 export function updateBreadcrumbTrail(state: TrailState): void {
   if (!session) return;
   session.state = state;
+  if (isOverlaySurfaceBlockingLiveRender()) {
+    session.liveRenderPending = true;
+    setLiveInteractionBlocked(true);
+    return;
+  }
+  renderBar();
+}
+
+export function updateBreadcrumbTrailSettings(settings: TabTrailSettings): void {
+  if (!session) return;
+  const visibleRowsChanged =
+    session.options.settings.maxVisibleSegments !== settings.maxVisibleSegments;
+  session.options.settings = settings;
+  if (!visibleRowsChanged) return;
+  if (isOverlaySurfaceBlockingLiveRender()) {
+    session.liveRenderPending = true;
+    setLiveInteractionBlocked(true);
+    return;
+  }
   renderBar();
 }
 
 export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailOptions): void {
   const { host, shadow } = createPanelHost();
-  // Non-modal: only the bar itself accepts pointer events.
+  const removeInteractionShield = installOverlayInteractionShield(shadow);
   host.style.pointerEvents = "none";
 
   const style = document.createElement("style");
-  style.textContent = getBaseStyles() + styles;
+  style.textContent = getBaseStyles() + styles + savedTrailStyles;
   shadow.appendChild(style);
 
   const layer = document.createElement("div");
@@ -79,9 +130,17 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
 
   const bar = document.createElement("div");
   bar.className = "wf-bar";
+  bar.dataset.tabtrailHitSurface = "";
+  bar.dataset.tabtrailWheelSurface = "";
   bar.setAttribute("role", "navigation");
   bar.setAttribute("aria-label", "Navigation trail");
   layer.appendChild(bar);
+
+  const noticeStack = document.createElement("div");
+  noticeStack.className = "wf-notice-stack";
+  noticeStack.dataset.tabtrailWheelSurface = "";
+  noticeStack.dataset.tabtrailScrollRegion = "";
+  layer.appendChild(noticeStack);
 
   session = {
     shadow,
@@ -91,7 +150,32 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
     state,
     expanded: false,
     position: options.settings.overlayPosition ?? DEFAULT_POSITION,
+    noticeStack,
+    statusNoticeCleanup: null,
+    undoNoticeCleanups: new Set(),
+    liveRenderPending: false,
   };
+
+  bindSavedTrailsHost({
+    layer,
+    bar,
+    client: options.savedTrailsClient ?? browserSavedTrailsClient,
+    getState: () => session?.state ?? { entries: [], cursor: -1 },
+    showNotice,
+    hideTrail: hideBreadcrumbTrail,
+    closeLiveSurfaces: () => {
+      closeOverlaySurface("menu");
+      closeEntryPreview();
+    },
+    flushLiveTrailUpdates: () => {
+      queueMicrotask(() => {
+        if (!session?.liveRenderPending || isOverlaySurfaceBlockingLiveRender()) return;
+        renderBar();
+      });
+    },
+    restoreLiveFocus,
+    setLiveInteractionBlocked,
+  });
 
   applyPosition();
   renderBar();
@@ -100,13 +184,9 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
     if (event.key !== "Escape" || !session) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    // Dismiss the innermost open surface first; only a bare Escape hides the bar.
-    if (menuElement) {
-      closeEntryMenu();
-      return;
-    }
+    if (closeTopOverlaySurface()) return;
     if (previewElement) {
-      closeEntryPreview();
+      closeEntryPreview(true);
       return;
     }
     hideBreadcrumbTrail();
@@ -115,8 +195,14 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
 
   registerPanelCleanup(() => {
     document.removeEventListener("keydown", onDocumentKeydown, true);
-    closeEntryMenu();
+    mainDragStop?.();
+    mainDragStop = null;
+    removeInteractionShield();
+    session?.statusNoticeCleanup?.();
+    for (const cleanup of session?.undoNoticeCleanups ?? []) cleanup();
+    closeAllOverlaySurfaces();
     closeEntryPreview();
+    unbindSavedTrailsHost();
     const closing = session;
     session = null;
     closing?.options.callbacks.onClose();
@@ -131,45 +217,59 @@ function applyPosition(): void {
   if (previewElement) positionPreviewPane(previewElement);
 }
 
+function setLiveInteractionBlocked(blocked: boolean): void {
+  if (!session) return;
+  session.bar.inert = blocked;
+  session.bar.classList.toggle("wf-bar-blocked", blocked);
+  if (blocked) session.bar.setAttribute("aria-disabled", "true");
+  else session.bar.removeAttribute("aria-disabled");
+}
+
+interface LiveFocusIdentity {
+  control: string;
+  entryKey?: string;
+}
+
+function liveEntryKey(entry: TrailEntry): string {
+  return `${entry.timestamp}:${entry.url}`;
+}
+
+function liveFocusIdentity(opener: HTMLElement | null): LiveFocusIdentity | null {
+  const control = opener?.dataset.liveControl;
+  if (!control) return null;
+  return { control, entryKey: opener.dataset.liveEntryKey };
+}
+
+function restoreLiveFocus(opener: HTMLElement | null): void {
+  const identity = liveFocusIdentity(opener);
+  scheduleFocusWhenIdle(() => {
+    if (!session) return null;
+    let target: HTMLElement | null = null;
+    if (identity) {
+      const candidates = session.bar.querySelectorAll<HTMLElement>(
+        `[data-live-control="${identity.control}"]`,
+      );
+      target = [...candidates].find(
+        (candidate) => !identity.entryKey || candidate.dataset.liveEntryKey === identity.entryKey,
+      ) ?? null;
+      if (!target) {
+        target = session.bar.querySelector<HTMLElement>("[data-live-control=library]");
+      }
+    } else if (opener?.isConnected) {
+      target = opener;
+    }
+    return target;
+  });
+}
+
+function focusLiveControlWhenIdle(control: string): void {
+  const marker = document.createElement("span");
+  marker.dataset.liveControl = control;
+  restoreLiveFocus(marker);
+}
+
 // --- Rendering ---
 
-function entryTitle(entry: TrailEntry): string {
-  if (entry.title.trim() !== "") return entry.title.trim();
-  const domain = extractDomain(entry.url);
-  return domain !== "" ? domain : entry.url;
-}
-
-function entryUrlSubtitle(entry: TrailEntry): string {
-  try {
-    const parsed = new URL(entry.url);
-    const path = parsed.pathname === "/" ? "" : parsed.pathname;
-    const query = parsed.search ? "?..." : "";
-    const hash = parsed.hash ? "#..." : "";
-    return `${parsed.hostname}${path}${query}${hash}`;
-  } catch (_) {
-    return entry.url;
-  }
-}
-
-function branchConnectorElement(nextEntry: TrailEntry): HTMLElement {
-  const connector = document.createElement("div");
-  connector.className = "wf-branch-connector";
-  connector.setAttribute("aria-hidden", "true");
-  // Differentiate how the next hop happened: a followed link vs an address-bar
-  // entry vs in-page (SPA/hash) routing.
-  if (nextEntry.transition === "typed") {
-    connector.classList.add("wf-branch-connector-typed");
-  } else if (nextEntry.transition === "spa" || nextEntry.transition === "fragment") {
-    connector.classList.add("wf-branch-connector-spa");
-  }
-  connector.title = nextEntry.transition;
-  return connector;
-}
-
-// Picks which entry indices render when the trail is longer than the visible
-// budget: the first entry anchors the path, the current entry stays visible,
-// the latest entry keeps the forward tail discoverable, and the rest of the
-// budget expands around the current entry.
 function visibleIndices(state: TrailState, maxVisible: number, expanded: boolean): number[] {
   const total = state.entries.length;
   if (expanded || total <= maxVisible) {
@@ -196,10 +296,20 @@ function visibleIndices(state: TrailState, maxVisible: number, expanded: boolean
 
 function renderBar(): void {
   if (!session) return;
+  setLiveInteractionBlocked(isOverlaySurfaceBlockingLiveRender());
+  session.liveRenderPending = false;
   const { bar, state, options } = session;
   const { settings, callbacks } = options;
-  closeEntryMenu();
+  const activeLiveControl = session.shadow.activeElement instanceof HTMLElement
+    ? session.shadow.activeElement
+    : null;
+  const menuReturnFocus = liveMenuTrigger;
+  const previewReturn = previewElement ? previewReturnFocus : null;
+  closeOverlaySurface("menu");
   closeEntryPreview();
+  if (activeLiveControl?.dataset.liveControl) restoreLiveFocus(activeLiveControl);
+  if (menuReturnFocus) restoreLiveFocus(menuReturnFocus);
+  if (previewReturn) restoreLiveFocus(previewReturn);
   bar.textContent = "";
 
   bar.appendChild(buildBranchHeader(callbacks));
@@ -215,6 +325,10 @@ function renderBar(): void {
   }
 
   const indices = visibleIndices(state, settings.maxVisibleSegments, session.expanded);
+  const forkIndex = state.entries.reduce(
+    (latest, entry, index) => index > 0 && !entry.historyBacked ? index : latest,
+    -1,
+  );
   let previousRendered: number | null = null;
   for (const index of indices) {
     if (previousRendered !== null) {
@@ -225,7 +339,7 @@ function renderBar(): void {
       }
       branchList.appendChild(branchConnectorElement(state.entries[index]));
     }
-    branchList.appendChild(buildBranchRow(index, state, callbacks));
+    branchList.appendChild(buildBranchRow(index, state, callbacks, index === forkIndex));
     previousRendered = index;
   }
 
@@ -237,7 +351,13 @@ function renderBar(): void {
 function buildBranchHeader(callbacks: BreadcrumbTrailCallbacks): HTMLDivElement {
   const header = document.createElement("div");
   header.className = "wf-branch-header";
-  header.appendChild(buildSettingsButton(callbacks));
+
+  const leftChrome = document.createElement("div");
+  leftChrome.className = "wf-header-left";
+  leftChrome.appendChild(buildSettingsButton(callbacks));
+  leftChrome.appendChild(buildLibraryButton());
+  header.appendChild(leftChrome);
+
   const title = document.createElement("span");
   title.className = "wf-branch-title";
   title.textContent = "In-Page Trail";
@@ -250,6 +370,7 @@ function buildBranchHeader(callbacks: BreadcrumbTrailCallbacks): HTMLDivElement 
 function buildBranchList(): HTMLDivElement {
   const branchList = document.createElement("div");
   branchList.className = "wf-branch-list";
+  branchList.dataset.tabtrailScrollRegion = "";
   return branchList;
 }
 
@@ -258,50 +379,172 @@ function buildGrip(): HTMLElement {
   grip.className = "wf-grip";
   grip.textContent = "⠿";
   grip.title = "Drag to move";
+  grip.setAttribute("aria-hidden", "true");
   grip.addEventListener("pointerdown", startDrag);
   return grip;
 }
 
 function buildSettingsButton(callbacks: BreadcrumbTrailCallbacks): HTMLElement {
-  const settings = document.createElement("span");
+  const settings = document.createElement("button");
   settings.className = "wf-settings";
+  settings.type = "button";
   settings.textContent = "⚙";
   settings.title = "Open settings";
+  settings.setAttribute("aria-label", "Open settings");
+  settings.dataset.liveControl = "settings";
   settings.addEventListener("click", () => callbacks.onOpenOptions());
   return settings;
 }
 
+function buildLibraryButton(): HTMLElement {
+  const library = document.createElement("button");
+  library.className = "wf-library";
+  library.type = "button";
+  library.textContent = "☰";
+  library.title = "Saved trails";
+  library.setAttribute("aria-label", "Saved trails");
+  library.setAttribute("aria-haspopup", "dialog");
+  library.setAttribute("aria-expanded", "false");
+  library.dataset.liveControl = "library";
+  library.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleSavedTrailsLibrary();
+  });
+  return library;
+}
+
 function buildCloseButton(): HTMLElement {
-  const close = document.createElement("span");
+  const close = document.createElement("button");
   close.className = "wf-close";
+  close.type = "button";
   close.textContent = "✕";
   close.title = "Hide (Esc)";
+  close.setAttribute("aria-label", "Hide trail");
+  close.dataset.liveControl = "close";
   close.addEventListener("click", () => hideBreadcrumbTrail());
   return close;
 }
 
+function restoreFocusAfterNotice(noticeSession: OverlaySession): void {
+  scheduleFocusWhenIdle(() => {
+    if (session !== noticeSession) return null;
+    const target =
+      noticeSession.noticeStack.querySelector<HTMLElement>(".wf-notice-action:not(:disabled)") ??
+      noticeSession.layer.querySelector<HTMLElement>(".wf-library-search") ??
+      noticeSession.layer.querySelector<HTMLElement>(".wf-library-row .wf-row-more") ??
+      noticeSession.bar.querySelector<HTMLElement>("[data-live-control=library]");
+    return target;
+  });
+}
+
+function showNotice(message: string, options: SavedTrailsNoticeOptions = {}): void {
+  if (!session) return;
+  const noticeSession = session;
+  const undoLane = options.undo === true;
+  if (!undoLane) noticeSession.statusNoticeCleanup?.();
+
+  const notice = document.createElement("div");
+  notice.className = `wf-notice wf-notice-${options.tone ?? "info"} ${
+    undoLane ? "wf-notice-undo" : "wf-notice-status"
+  }`;
+  notice.dataset.tabtrailHitSurface = "";
+  notice.setAttribute("role", options.tone === "error" ? "alert" : "status");
+  notice.setAttribute("aria-live", options.tone === "error" ? "assertive" : "polite");
+
+  const copy = document.createElement("span");
+  copy.className = "wf-notice-copy";
+  copy.textContent = message;
+  notice.appendChild(copy);
+
+  if (options.actionLabel && options.action) {
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "wf-notice-action";
+    action.textContent = options.actionLabel;
+    action.addEventListener("click", () => {
+      if (!options.action || action.disabled) return;
+      action.disabled = true;
+      action.textContent = "Working…";
+      void Promise.resolve(options.action()).then(() => {
+        if (notice.isConnected) remove();
+      }).catch(() => {
+        if (session === noticeSession) {
+          showNotice("Action failed", { tone: "error", durationMs: 5000 });
+        }
+      });
+    });
+    notice.appendChild(action);
+  }
+  if (undoLane) {
+    noticeSession.noticeStack.appendChild(notice);
+  } else {
+    noticeSession.noticeStack.prepend(notice);
+  }
+
+  let remainingMs = options.durationMs ?? (options.action ? 8000 : 2200);
+  let startedAt = Date.now();
+  let timer: number | null = null;
+  const remove = (): void => {
+    const ownedFocus = notice.contains(noticeSession.shadow.activeElement);
+    if (timer != null) window.clearTimeout(timer);
+    timer = null;
+    notice.remove();
+    if (undoLane) {
+      noticeSession.undoNoticeCleanups.delete(remove);
+    } else if (noticeSession.statusNoticeCleanup === remove) {
+      noticeSession.statusNoticeCleanup = null;
+    }
+    if (ownedFocus) restoreFocusAfterNotice(noticeSession);
+  };
+  const resume = (): void => {
+    if (timer != null || remainingMs <= 0) return;
+    startedAt = Date.now();
+    timer = window.setTimeout(remove, remainingMs);
+  };
+  const pause = (): void => {
+    if (timer == null) return;
+    window.clearTimeout(timer);
+    timer = null;
+    remainingMs = Math.max(0, remainingMs - (Date.now() - startedAt));
+  };
+  notice.addEventListener("mouseenter", pause);
+  notice.addEventListener("mouseleave", resume);
+  notice.addEventListener("focusin", pause);
+  notice.addEventListener("focusout", resume);
+  if (undoLane) noticeSession.undoNoticeCleanups.add(remove);
+  else noticeSession.statusNoticeCleanup = remove;
+  resume();
+}
+
 function buildMorePill(hiddenCount: number): HTMLElement {
-  const pill = document.createElement("span");
+  const pill = document.createElement("button");
+  pill.type = "button";
   pill.className = "wf-more";
+  pill.dataset.liveControl = "expand";
   pill.textContent = `+${hiddenCount} more`;
   pill.title = "Show the full trail";
   pill.addEventListener("click", () => {
     if (!session) return;
     session.expanded = true;
     renderBar();
+    focusLiveControlWhenIdle("collapse");
   });
   return pill;
 }
 
 function buildCollapsePill(): HTMLElement {
-  const pill = document.createElement("span");
+  const pill = document.createElement("button");
+  pill.type = "button";
   pill.className = "wf-more wf-more-collapse";
+  pill.dataset.liveControl = "collapse";
   pill.textContent = "Show less";
   pill.title = "Collapse the trail";
   pill.addEventListener("click", () => {
     if (!session) return;
     session.expanded = false;
     renderBar();
+    focusLiveControlWhenIdle("expand");
   });
   return pill;
 }
@@ -310,18 +553,41 @@ function buildBranchRow(
   index: number,
   state: TrailState,
   callbacks: BreadcrumbTrailCallbacks,
+  isFork: boolean,
 ): HTMLElement {
   const entry = state.entries[index];
+  const isCurrent = index === state.cursor;
   const row = document.createElement("div");
   row.className = "wf-branch-row";
-  if (index === state.cursor) row.classList.add("wf-branch-row-current");
+  if (isCurrent) row.classList.add("wf-branch-row-current");
   if (index > state.cursor) row.classList.add("wf-branch-row-forward");
-  row.setAttribute("aria-current", index === state.cursor ? "page" : "false");
+  if (isFork) {
+    row.classList.add("wf-branch-row-fork");
+    row.title = "Direct-navigation boundary — earlier pages are outside native browser history";
+  }
+
+  const main = document.createElement(isCurrent ? "div" : "button");
+  if (!isCurrent) (main as HTMLButtonElement).type = "button";
+  main.className = "wf-branch-row-main";
+  main.dataset.liveControl = "row-main";
+  main.dataset.liveEntryKey = liveEntryKey(entry);
+  if (isCurrent) {
+    main.setAttribute("role", "group");
+    main.setAttribute("aria-current", "page");
+  }
+  if (isFork) {
+    main.setAttribute(
+      "aria-label",
+      isCurrent
+        ? `${entryTitle(entry)}. Current page. Direct-navigation boundary; earlier pages are outside native browser history.`
+        : `${entryTitle(entry)}. Direct-navigation boundary; selecting this page navigates directly.`,
+    );
+  }
 
   const node = document.createElement("span");
   node.className = "wf-branch-node";
   node.setAttribute("aria-hidden", "true");
-  row.appendChild(node);
+  main.appendChild(node);
 
   const content = document.createElement("div");
   content.className = "wf-branch-entry";
@@ -336,20 +602,23 @@ function buildBranchRow(
   url.textContent = entryUrlSubtitle(entry);
   content.appendChild(url);
 
-  row.appendChild(content);
+  main.appendChild(content);
+  row.appendChild(main);
   const more = buildRowMoreButton(row, index, entry, callbacks);
   row.appendChild(more);
 
-  row.addEventListener("click", (event) => {
-    event.preventDefault();
-    if (index !== state.cursor) callbacks.onJump(index);
-  });
+  if (!isCurrent) {
+  main.addEventListener("click", (event) => {
+      event.preventDefault();
+      callbacks.onJump(index);
+    });
+  }
   row.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    // The ⋯ button is the menu trigger even for right-click opens, so a
-    // pointerdown on it never counts as "outside" and the toggle can close.
-    openEntryMenu(row, index, entry, callbacks, more);
+    const focusOnOpen = session?.shadow.activeElement instanceof HTMLElement &&
+      row.contains(session.shadow.activeElement);
+    openEntryMenu(row, index, entry, callbacks, more, focusOnOpen);
   });
   return row;
 }
@@ -366,51 +635,55 @@ function buildRowMoreButton(
   more.textContent = "⋯";
   more.title = "More";
   more.setAttribute("aria-label", "More options for this page");
+  more.dataset.liveControl = "row-more";
+  more.dataset.liveEntryKey = liveEntryKey(entry);
   more.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    toggleEntryMenu(anchor, more, index, entry, callbacks);
+    toggleEntryMenu(anchor, more, index, entry, callbacks, event.detail === 0);
   });
   return more;
 }
 
-// --- In-page preview ---
+// --- In-page preview (live row iframe) ---
 
 let previewElement: HTMLDivElement | null = null;
 let previewedRowElement: HTMLElement | null = null;
 let previewManualPosition: { left: number; top: number } | null = null;
-let previewDragCleanup: (() => void) | null = null;
+let previewDragStop: (() => void) | null = null;
+let previewReturnFocus: HTMLElement | null = null;
 
-function closeEntryPreview(): void {
-  stopPreviewPaneDrag();
+function closeEntryPreview(restore = false): void {
+  const returnFocus = previewReturnFocus;
+  previewDragStop?.();
+  previewDragStop = null;
   previewManualPosition = null;
   previewedRowElement?.classList.remove("wf-branch-row-previewed");
   previewedRowElement = null;
   previewElement?.remove();
   previewElement = null;
-}
-
-function stopPreviewPaneDrag(): void {
-  if (previewDragCleanup) {
-    previewDragCleanup();
-    previewDragCleanup = null;
-  }
-  previewElement?.classList.remove("wf-preview-pane-dragging");
+  previewReturnFocus = null;
+  if (restore) scheduleFocusWhenIdle(() => returnFocus);
 }
 
 function openEntryPreview(
-  anchor: HTMLElement,
-  index: number,
+  anchor: HTMLElement | null,
   entry: TrailEntry,
-  callbacks: BreadcrumbTrailCallbacks,
+  onOpenInNewTab: () => void,
+  returnFocus: HTMLElement | null,
 ): void {
   if (!session) return;
   closeEntryPreview();
-  anchor.classList.add("wf-branch-row-previewed");
-  previewedRowElement = anchor;
+  if (anchor) {
+    anchor.classList.add("wf-branch-row-previewed");
+    previewedRowElement = anchor;
+  }
 
   const preview = document.createElement("div");
   preview.className = "wf-preview-pane";
+  preview.dataset.tabtrailHitSurface = "";
+  preview.setAttribute("role", "dialog");
+  preview.setAttribute("aria-modal", "false");
 
   const header = document.createElement("div");
   header.className = "wf-preview-pane-header";
@@ -424,38 +697,57 @@ function openEntryPreview(
   identity.appendChild(kicker);
 
   const title = document.createElement("div");
+  title.id = "tabtrail-live-preview-title";
   title.className = "wf-preview-pane-title";
   title.textContent = entryTitle(entry);
   identity.appendChild(title);
 
   const url = document.createElement("div");
+  url.id = "tabtrail-live-preview-url";
   url.className = "wf-preview-pane-url";
   url.textContent = entryUrlSubtitle(entry);
   identity.appendChild(url);
+  preview.setAttribute("aria-labelledby", title.id);
+  preview.setAttribute("aria-describedby", url.id);
 
   const actions = document.createElement("div");
   actions.className = "wf-preview-pane-actions";
 
-  const drag = document.createElement("button");
+  const drag = document.createElement("span");
   drag.className = "wf-preview-pane-drag";
-  drag.type = "button";
   drag.textContent = "⠿";
   drag.title = "Move preview pane";
-  drag.addEventListener("pointerdown", startPreviewPaneDrag);
+  drag.setAttribute("aria-hidden", "true");
+  drag.addEventListener("pointerdown", (event) => {
+    if (!previewElement) return;
+    previewElement.classList.remove("wf-preview-pane-bottom");
+    previewDragStop?.();
+    previewDragStop = startFreePixelDrag(previewElement, event, {
+      draggingClass: "wf-preview-pane-dragging",
+      onMove: (position) => {
+        previewManualPosition = position;
+      },
+      onEnd: () => {
+        previewDragStop = null;
+      },
+    });
+  });
 
   const open = document.createElement("button");
   open.className = "wf-preview-pane-action";
   open.type = "button";
   open.textContent = "↗";
   open.title = "Open in new tab";
-  open.addEventListener("click", () => callbacks.onOpenInNewTab(index));
+  open.setAttribute("aria-label", "Open previewed page in a new tab");
+  open.addEventListener("click", () => onOpenInNewTab());
 
   const close = document.createElement("button");
   close.className = "wf-preview-pane-close";
   close.type = "button";
   close.textContent = "✕";
   close.title = "Close preview";
-  close.addEventListener("click", () => closeEntryPreview());
+  close.setAttribute("aria-label", "Close page preview");
+  close.addEventListener("click", () => closeEntryPreview(true));
 
   actions.appendChild(drag);
   actions.appendChild(open);
@@ -476,6 +768,8 @@ function openEntryPreview(
   session.layer.appendChild(preview);
   positionPreviewPane(preview);
   previewElement = preview;
+  previewReturnFocus = returnFocus;
+  close.focus({ preventScroll: true });
 }
 
 function positionPreviewPane(preview: HTMLElement): void {
@@ -494,11 +788,12 @@ function positionPreviewPane(preview: HTMLElement): void {
 
   if (previewManualPosition) {
     const rect = preview.getBoundingClientRect();
-    const position = clampPreviewPanePosition(
+    const position = clampInViewport(
       previewManualPosition.left,
       previewManualPosition.top,
       rect.width || PREVIEW_DESKTOP_WIDTH,
       rect.height || PREVIEW_DESKTOP_HEIGHT,
+      margin,
     );
     previewManualPosition = position;
     preview.style.left = `${position.left}px`;
@@ -538,86 +833,74 @@ function positionPreviewPane(preview: HTMLElement): void {
   preview.style.top = `${Math.max(margin, viewportHeight - height - margin)}px`;
 }
 
-function clampPreviewPanePosition(
-  left: number,
-  top: number,
-  width: number,
-  height: number,
-): { left: number; top: number } {
-  const margin = PREVIEW_VIEWPORT_MARGIN;
-  const maxLeft = Math.max(margin, window.innerWidth - width - margin);
-  const maxTop = Math.max(margin, window.innerHeight - height - margin);
-  return {
-    left: Math.min(Math.max(margin, left), maxLeft),
-    top: Math.min(Math.max(margin, top), maxTop),
-  };
-}
+// --- Live row context menu ---
 
-function startPreviewPaneDrag(event: PointerEvent): void {
-  if (!previewElement) return;
-  event.preventDefault();
-  event.stopPropagation();
-  stopPreviewPaneDrag();
-
-  const pane = previewElement;
-  const paneRect = pane.getBoundingClientRect();
-  const offsetX = event.clientX - paneRect.left;
-  const offsetY = event.clientY - paneRect.top;
-  pane.classList.remove("wf-preview-pane-bottom");
-  pane.classList.add("wf-preview-pane-dragging");
-  pane.style.width = `${paneRect.width}px`;
-  pane.style.height = `${paneRect.height}px`;
-  previewManualPosition = clampPreviewPanePosition(
-    paneRect.left,
-    paneRect.top,
-    paneRect.width,
-    paneRect.height,
-  );
-  pane.style.left = `${previewManualPosition.left}px`;
-  pane.style.top = `${previewManualPosition.top}px`;
-
-  const move = (moveEvent: PointerEvent): void => {
-    const position = clampPreviewPanePosition(
-      moveEvent.clientX - offsetX,
-      moveEvent.clientY - offsetY,
-      paneRect.width,
-      paneRect.height,
-    );
-    previewManualPosition = position;
-    pane.style.left = `${position.left}px`;
-    pane.style.top = `${position.top}px`;
-  };
-
-  const end = (): void => {
-    window.removeEventListener("pointermove", move, true);
-    window.removeEventListener("pointerup", end, true);
-    window.removeEventListener("pointercancel", end, true);
-    previewDragCleanup = null;
-    pane.classList.remove("wf-preview-pane-dragging");
-  };
-
-  previewDragCleanup = end;
-  window.addEventListener("pointermove", move, true);
-  window.addEventListener("pointerup", end, true);
-  window.addEventListener("pointercancel", end, true);
-}
-
-// --- Row context menu (in-shadow; the native menu is suppressed) ---
-
-let menuElement: HTMLDivElement | null = null;
-let menuDismissCleanup: (() => void) | null = null;
-let menuAnchorElement: HTMLElement | null = null;
-let menuTriggerElement: HTMLElement | null = null;
-
-function closeEntryMenu(): void {
-  menuElement?.remove();
-  menuElement = null;
-  menuAnchorElement = null;
-  menuTriggerElement = null;
-  if (menuDismissCleanup) {
-    menuDismissCleanup();
-    menuDismissCleanup = null;
+function toggleEntryMenu(
+  anchor: HTMLElement,
+  trigger: HTMLElement,
+  index: number,
+  entry: TrailEntry,
+  callbacks: BreadcrumbTrailCallbacks,
+  focusOnOpen: boolean,
+): void {
+  // Toggle: if this trigger already owns the open menu, close it.
+  if (liveMenuTrigger === trigger) {
+    closeOverlaySurface("menu");
+    return;
   }
+  openEntryMenu(anchor, index, entry, callbacks, trigger, focusOnOpen);
+}
+
+let liveMenuTrigger: HTMLElement | null = null;
+
+function openEntryMenu(
+  anchor: HTMLElement,
+  index: number,
+  entry: TrailEntry,
+  callbacks: BreadcrumbTrailCallbacks,
+  trigger: HTMLElement,
+  focusOnOpen: boolean,
+): void {
+  if (!session) return;
+  closeOverlaySurface("menu");
+
+  let closed = false;
+  liveMenuTrigger = trigger;
+  const handle = showContextMenu({
+    layer: session.layer,
+    anchor,
+    trigger,
+    detail: {
+      title: entryTitle(entry),
+      subtitle: entry.url,
+      meta: `Visited ${formatTrailTimestamp(entry.timestamp, Date.now())}`,
+    },
+    items: [
+      {
+        label: "Preview",
+        action: () =>
+          openEntryPreview(anchor, entry, () => callbacks.onOpenInNewTab(index), trigger),
+      },
+      { label: "Open in new tab", action: () => callbacks.onOpenInNewTab(index) },
+      { label: "Open in new window", action: () => callbacks.onOpenInNewWindow(index) },
+      { label: "Copy URL", action: () => void copyText(entry.url) },
+      {
+        label: "Save trail up to this point in path",
+        action: () => openSaveTrailDialog(index, trigger),
+      },
+    ],
+    focusOnOpen,
+    onClose: () => {
+      if (closed) return;
+      closed = true;
+      liveMenuTrigger = null;
+      dropOverlaySurface("menu");
+    },
+  });
+
+  pushOverlaySurface("menu", () => {
+    if (!closed) handle.close();
+  });
 }
 
 async function copyText(text: string): Promise<void> {
@@ -639,142 +922,66 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-function toggleEntryMenu(
-  anchor: HTMLElement,
-  trigger: HTMLElement,
-  index: number,
-  entry: TrailEntry,
-  callbacks: BreadcrumbTrailCallbacks,
-): void {
-  if (menuElement && menuAnchorElement === anchor && menuTriggerElement === trigger) {
-    closeEntryMenu();
-    return;
-  }
-  openEntryMenu(anchor, index, entry, callbacks, trigger);
-}
-
-function openEntryMenu(
-  anchor: HTMLElement,
-  index: number,
-  entry: TrailEntry,
-  callbacks: BreadcrumbTrailCallbacks,
-  trigger: HTMLElement,
-): void {
-  if (!session) return;
-  closeEntryMenu();
-
-  const menu = document.createElement("div");
-  menu.className = "wf-menu";
-
-  const detail = document.createElement("div");
-  detail.className = "wf-menu-detail";
-
-  const title = document.createElement("div");
-  title.className = "wf-menu-detail-title";
-  title.textContent = entryTitle(entry);
-  detail.appendChild(title);
-
-  const url = document.createElement("div");
-  url.className = "wf-menu-detail-url";
-  url.textContent = entry.url;
-  detail.appendChild(url);
-
-  const time = document.createElement("div");
-  time.className = "wf-menu-detail-time";
-  time.textContent = `Visited ${formatTrailTimestamp(entry.timestamp, Date.now())}`;
-  detail.appendChild(time);
-
-  menu.appendChild(detail);
-
-  const actions = document.createElement("div");
-  actions.className = "wf-menu-actions";
-  const items: Array<{ label: string; action: () => void }> = [
-    { label: "Preview", action: () => openEntryPreview(anchor, index, entry, callbacks) },
-    { label: "Open in new tab", action: () => callbacks.onOpenInNewTab(index) },
-    { label: "Open in new window", action: () => callbacks.onOpenInNewWindow(index) },
-    { label: "Copy URL", action: () => void copyText(entry.url) },
-  ];
-  for (const item of items) {
-    const row = document.createElement("div");
-    row.className = "wf-menu-item";
-    row.textContent = item.label;
-    row.addEventListener("click", (event) => {
-      event.stopPropagation();
-      closeEntryMenu();
-      item.action();
-    });
-    actions.appendChild(row);
-  }
-  menu.appendChild(actions);
-  session.layer.appendChild(menu);
-  positionPopover(menu, anchor);
-  menuElement = menu;
-  menuAnchorElement = anchor;
-  menuTriggerElement = trigger;
-
-  const onOutsidePointer = (event: Event): void => {
-    const path = event.composedPath();
-    if (menuElement && path.includes(menuElement)) return;
-    if (menuTriggerElement && path.includes(menuTriggerElement)) return;
-    closeEntryMenu();
-  };
-  document.addEventListener("pointerdown", onOutsidePointer, true);
-  menuDismissCleanup = () => {
-    document.removeEventListener("pointerdown", onOutsidePointer, true);
-  };
-}
-
-// Places a popover under its anchor row, clamped to the viewport.
-function positionPopover(popover: HTMLElement, anchor: HTMLElement): void {
-  const anchorRect = anchor.getBoundingClientRect();
-  popover.style.left = "0px";
-  popover.style.top = "0px";
-  const popoverRect = popover.getBoundingClientRect();
-  const width = popoverRect.width || 240;
-  const left = Math.min(
-    Math.max(8, anchorRect.left),
-    Math.max(8, window.innerWidth - width - 8),
-  );
-  let top = anchorRect.bottom + 6;
-  if (top + popoverRect.height > window.innerHeight - 8) {
-    top = Math.max(8, anchorRect.top - popoverRect.height - 6);
-  }
-  popover.style.left = `${left}px`;
-  popover.style.top = `${top}px`;
-}
-
-// --- Dragging ---
+// --- Main bar drag (percent position, persisted) ---
 
 function startDrag(event: PointerEvent): void {
   if (!session) return;
+  mainDragStop?.();
+  mainDragStop = null;
   event.preventDefault();
-  const { bar } = session;
+  const dragSession = session;
+  const { bar } = dragSession;
+  const captureTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : bar;
+  const pointerId = event.pointerId;
+  try {
+    captureTarget.setPointerCapture(pointerId);
+  } catch (_) {
+    // Synthetic events and older engines can lack an active pointer capture.
+  }
   const barRect = bar.getBoundingClientRect();
   const grabOffsetX = event.clientX - (barRect.left + barRect.width / 2);
   const grabOffsetY = event.clientY - barRect.top;
   bar.classList.add("wf-dragging");
 
   const onMove = (moveEvent: PointerEvent): void => {
-    if (!session) return;
+    if (moveEvent.pointerId !== pointerId) return;
+    if (session !== dragSession) return;
     const x = ((moveEvent.clientX - grabOffsetX) / window.innerWidth) * 100;
     const y = ((moveEvent.clientY - grabOffsetY) / window.innerHeight) * 100;
-    session.position = {
+    dragSession.position = {
       xPercent: Math.min(Math.max(x, 0), 100),
       yPercent: Math.min(Math.max(y, 0), 96),
     };
     applyPosition();
   };
 
-  const onEnd = (): void => {
+  let stopped = false;
+  const finish = (persist: boolean): void => {
+    if (stopped) return;
+    stopped = true;
     window.removeEventListener("pointermove", onMove, true);
-    window.removeEventListener("pointerup", onEnd, true);
-    window.removeEventListener("pointercancel", onEnd, true);
-    if (!session) return;
-    session.bar.classList.remove("wf-dragging");
-    session.options.callbacks.onPositionChange(session.position);
+    window.removeEventListener("pointerup", onPointerEnd, true);
+    window.removeEventListener("pointercancel", onPointerEnd, true);
+    try {
+      if (captureTarget.hasPointerCapture(pointerId)) {
+        captureTarget.releasePointerCapture(pointerId);
+      }
+    } catch (_) {
+      // Pointer capture may already be released if the overlay was removed.
+    }
+    bar.classList.remove("wf-dragging");
+    if (mainDragStop === cancel) mainDragStop = null;
+    if (persist && session === dragSession) {
+      dragSession.options.callbacks.onPositionChange(dragSession.position);
+    }
   };
+  const onPointerEnd = (endEvent: PointerEvent): void => {
+    if (endEvent.pointerId === pointerId) finish(true);
+  };
+  const cancel = (): void => finish(false);
+  mainDragStop = cancel;
 
   window.addEventListener("pointermove", onMove, true);
-  window.addEventListener("pointerup", onEnd, true);
-  window.addEventListener("pointercancel", onEnd, true);
+  window.addEventListener("pointerup", onPointerEnd, true);
+  window.addEventListener("pointercancel", onPointerEnd, true);
 }
