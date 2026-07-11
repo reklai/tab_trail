@@ -5,13 +5,10 @@ import {
   UNDO_DURATION_MS,
   acceptAuthoritativeTrails,
   activeShadowElement,
-  host,
   libraryFocusIdentity,
-  librarySession,
-  pendingTrailIds,
-  renderLibrary,
   restoreFocus,
   restoreLibraryFocus,
+  savedTrailsUi,
   type LibrarySession,
   type SavedTrailsHost,
 } from "./savedTrailsSession";
@@ -25,16 +22,16 @@ export async function runTrailMutation<T extends {
   trailId: string,
   task: () => Promise<T>,
 ): Promise<T | null> {
-  if (pendingTrailIds.has(trailId)) return null;
-  pendingTrailIds.add(trailId);
+  const mutationOwner = savedTrailsUi.beginTrailMutation(trailId);
+  if (!mutationOwner) return null;
   closeOverlaySurface("menu");
   const operationFocus = libraryFocusIdentity(activeShadowElement(session.host));
   const mutationGeneration = session.loadRequest;
-  renderLibrary(session);
+  savedTrailsUi.renderLibrary(session);
   try {
     const result = await task();
     if (!result.ok) {
-      if (host === session.host) {
+      if (savedTrailsUi.host === session.host) {
         session.host.showNotice(result.reason || "Could not save changes", {
           tone: "error",
           durationMs: 5000,
@@ -47,14 +44,15 @@ export async function runTrailMutation<T extends {
     }
     return result;
   } catch (_) {
-    if (host === session.host) {
+    if (savedTrailsUi.host === session.host) {
       session.host.showNotice("Could not save changes", { tone: "error", durationMs: 5000 });
     }
     return null;
   } finally {
-    pendingTrailIds.delete(trailId);
-    if (host === session.host && librarySession === session) {
-      renderLibrary(session);
+    const released = savedTrailsUi.finishTrailMutation(trailId, mutationOwner);
+    const currentSession = savedTrailsUi.librarySession;
+    if (released && currentSession) savedTrailsUi.renderLibrary(currentSession);
+    if (savedTrailsUi.host === session.host && currentSession === session) {
       restoreLibraryFocus(operationFocus);
     }
   }
@@ -66,14 +64,14 @@ export async function togglePinned(session: LibrarySession, trail: SavedTrail): 
     trail.id,
     () => session.host.client.setPinned(trail.id, !trail.pinned),
   );
-  if (host === session.host && result?.ok) {
+  if (savedTrailsUi.host === session.host && result?.ok) {
     session.host.showNotice(trail.pinned ? `Unpinned “${trail.name}”` : `Pinned “${trail.name}”`);
   }
 }
 
 export async function removeTrail(session: LibrarySession, trail: SavedTrail): Promise<void> {
   const result = await runTrailMutation(session, trail.id, () => session.host.client.delete(trail.id));
-  if (host !== session.host || !result?.ok || !("trail" in result)) return;
+  if (savedTrailsUi.host !== session.host || !result?.ok || !("trail" in result)) return;
   const deleted = result.trail;
   offerDeleteUndo(session.host, deleted, session);
   restoreFocus(
@@ -102,7 +100,7 @@ export async function restoreDeletedTrail(
   const mutationGeneration = originSession.loadRequest;
   try {
     const restored = await boundHost.client.restore(deleted);
-    if (host !== boundHost) return;
+    if (savedTrailsUi.host !== boundHost) return;
     if (!restored.ok) {
       boundHost.showNotice(restored.reason, {
         tone: "error",
@@ -116,7 +114,7 @@ export async function restoreDeletedTrail(
     acceptAuthoritativeTrails(restored.trails, originSession, mutationGeneration);
     boundHost.showNotice(`Restored “${restored.trail.name}”`);
   } catch (_) {
-    if (host !== boundHost) return;
+    if (savedTrailsUi.host !== boundHost) return;
     boundHost.showNotice("Could not restore trail", {
       tone: "error",
       actionLabel: "Retry",
@@ -128,11 +126,11 @@ export async function restoreDeletedTrail(
 }
 
 export async function navigateSavedTrail(trail: SavedTrail, mode: SavedTrailOpenMode): Promise<void> {
-  if (!host) return;
-  const boundHost = host;
+  if (!savedTrailsUi.host) return;
+  const boundHost = savedTrailsUi.host;
   try {
     const result = await boundHost.client.open(trail.entries, mode);
-    if (host !== boundHost) return;
+    if (savedTrailsUi.host !== boundHost) return;
     if (!result.ok) {
       boundHost.showNotice(result.reason || "Could not open trail", { tone: "error" });
       return;
@@ -140,7 +138,7 @@ export async function navigateSavedTrail(trail: SavedTrail, mode: SavedTrailOpen
     if (mode === "current") boundHost.hideTrail();
     else boundHost.showNotice("Opened in new tab");
   } catch (_) {
-    if (host === boundHost) {
+    if (savedTrailsUi.host === boundHost) {
       boundHost.showNotice("Could not open trail", { tone: "error" });
     }
   }

@@ -1,5 +1,6 @@
-// Shared types, module state, and focus helpers for the saved-trails UI.
-// Feature modules import this instead of reaching across one another.
+// Saved-trails UI session state. One controller instance is active while the
+// live trail panel is open; feature modules read/write through savedTrailsUi
+// instead of scattering module-level lets.
 
 import type { SavedTrailsClient } from "../../../adapters/runtime/savedTrailsClient";
 import { normalizeSavedTrails, slicePathToIndex } from "../../../core/trail/trailCore";
@@ -64,43 +65,76 @@ export interface LibraryFocusIdentity {
   action: LibraryAction;
 }
 
-export let host: SavedTrailsHost | null = null;
-export let librarySession: LibrarySession | null = null;
-export let libraryDragStop: (() => void) | null = null;
-export let treePreviewElement: HTMLDivElement | null = null;
-export const pendingTrailIds = new Set<string>();
+/** Owns all mutable saved-trails UI session state for one live overlay. */
+export class SavedTrailsUiController {
+  host: SavedTrailsHost | null = null;
+  librarySession: LibrarySession | null = null;
+  libraryDragStop: (() => void) | null = null;
+  treePreviewElement: HTMLDivElement | null = null;
+  readonly pendingTrailIds = new Set<string>();
+  private readonly pendingTrailOwners = new Map<string, symbol>();
+  private nextDialogId = 0;
+  private renderLibraryImpl: ((session: LibrarySession) => void) | null = null;
 
-let nextDialogId = 0;
-let renderLibraryImpl: ((session: LibrarySession) => void) | null = null;
+  setHost(next: SavedTrailsHost | null): void {
+    this.host = next;
+  }
 
-export function setHost(next: SavedTrailsHost | null): void {
-  host = next;
+  setLibrarySession(next: LibrarySession | null): void {
+    this.librarySession = next;
+  }
+
+  setLibraryDragStop(next: (() => void) | null): void {
+    this.libraryDragStop = next;
+  }
+
+  setTreePreviewElement(next: HTMLDivElement | null): void {
+    this.treePreviewElement = next;
+  }
+
+  allocateDialogId(): number {
+    this.nextDialogId += 1;
+    return this.nextDialogId;
+  }
+
+  /** Library module registers its renderer so dialogs/mutations avoid circular imports. */
+  registerRenderLibrary(fn: (session: LibrarySession) => void): void {
+    this.renderLibraryImpl = fn;
+  }
+
+  renderLibrary(session: LibrarySession): void {
+    this.renderLibraryImpl?.(session);
+  }
+
+  beginTrailMutation(trailId: string): symbol | null {
+    if (this.pendingTrailOwners.has(trailId)) return null;
+    const owner = Symbol(trailId);
+    this.pendingTrailOwners.set(trailId, owner);
+    this.pendingTrailIds.add(trailId);
+    return owner;
+  }
+
+  finishTrailMutation(trailId: string, owner: symbol): boolean {
+    if (this.pendingTrailOwners.get(trailId) !== owner) return false;
+    this.pendingTrailOwners.delete(trailId);
+    this.pendingTrailIds.delete(trailId);
+    return true;
+  }
+
+  clear(): void {
+    this.libraryDragStop?.();
+    this.libraryDragStop = null;
+    this.librarySession = null;
+    this.treePreviewElement = null;
+    // Pending RPCs outlive a hibernated overlay. Their ownership must remain
+    // registered until the operation itself settles so a reopened overlay
+    // cannot start an overlapping mutation for the same saved trail.
+    this.host = null;
+  }
 }
 
-export function setLibrarySession(next: LibrarySession | null): void {
-  librarySession = next;
-}
-
-export function setLibraryDragStop(next: (() => void) | null): void {
-  libraryDragStop = next;
-}
-
-export function setTreePreviewElement(next: HTMLDivElement | null): void {
-  treePreviewElement = next;
-}
-
-export function allocateDialogId(): number {
-  return ++nextDialogId;
-}
-
-/** Library module registers its renderer so dialogs/mutations avoid circular imports. */
-export function registerRenderLibrary(fn: (session: LibrarySession) => void): void {
-  renderLibraryImpl = fn;
-}
-
-export function renderLibrary(session: LibrarySession): void {
-  renderLibraryImpl?.(session);
-}
+/** Active controller for the current breadcrumb overlay session. */
+export const savedTrailsUi = new SavedTrailsUiController();
 
 export function syncLiveInteraction(boundHost: SavedTrailsHost): void {
   boundHost.setLiveInteractionBlocked(isOverlaySurfaceBlockingLiveRender());
@@ -129,17 +163,19 @@ export function findTrailControl(
   trailId: string,
   action: LibraryAction = "more",
 ): HTMLElement | null {
-  if (!librarySession) return null;
-  const row = [...librarySession.list.querySelectorAll<HTMLElement>(".wf-library-row")]
+  const session = savedTrailsUi.librarySession;
+  if (!session) return null;
+  const row = [...session.list.querySelectorAll<HTMLElement>(".wf-library-row")]
     .find((candidate) => candidate.dataset.trailId === trailId);
   return row?.querySelector<HTMLElement>(`[data-library-action="${action}"]`) ?? null;
 }
 
 export function libraryPrimaryControl(): HTMLElement | null {
-  if (!librarySession) return null;
-  return librarySession.list.querySelector<HTMLElement>(
+  const session = savedTrailsUi.librarySession;
+  if (!session) return null;
+  return session.list.querySelector<HTMLElement>(
     ".wf-library-row .wf-row-more:not(:disabled), .wf-library-state-action:not(:disabled)",
-  ) ?? librarySession.search;
+  ) ?? session.search;
 }
 
 export function restoreLibraryFocus(
@@ -177,7 +213,7 @@ export function restoreSurfaceFocus(
 
 export function restoreLibraryPrimaryFocus(session: LibrarySession): void {
   focusWhenIdle(() => {
-    if (librarySession !== session) return null;
+    if (savedTrailsUi.librarySession !== session) return null;
     return libraryPrimaryControl();
   });
 }
@@ -187,7 +223,7 @@ export function acceptAuthoritativeTrails(
   expectedSession?: LibrarySession | null,
   expectedGeneration?: number,
 ): void {
-  const current = librarySession;
+  const current = savedTrailsUi.librarySession;
   if (
     !current ||
     (expectedSession !== undefined && current !== expectedSession) ||
@@ -196,11 +232,12 @@ export function acceptAuthoritativeTrails(
   closeOverlaySurface("treePreview");
   current.trails = normalizeSavedTrails(trails);
   current.state = "ready";
-  renderLibrary(current);
+  savedTrailsUi.renderLibrary(current);
 }
 
 export function currentCapturedPath(): TrailEntry[] | null {
-  if (!host) return null;
-  const state = host.getState();
+  const bound = savedTrailsUi.host;
+  if (!bound) return null;
+  const state = bound.getState();
   return slicePathToIndex(state, state.cursor);
 }

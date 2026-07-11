@@ -13,15 +13,13 @@ import {
 import {
   LIBRARY_PANEL_GAP,
   VIEWPORT_MARGIN,
-  host,
-  librarySession,
   restoreSurfaceFocus,
-  setTreePreviewElement,
+  savedTrailsUi,
 } from "./savedTrailsSession";
 
 export function openSavedTrailTreePreview(trail: SavedTrail, opener: HTMLElement | null): void {
-  if (!host) return;
-  const previewHost = host;
+  if (!savedTrailsUi.host) return;
+  const previewHost = savedTrailsUi.host;
   previewHost.closeLiveSurfaces();
   closeOverlaySurface("menu");
   closeOverlaySurface("treePreview");
@@ -77,23 +75,23 @@ export function openSavedTrailTreePreview(trail: SavedTrail, opener: HTMLElement
   }
   panel.appendChild(list);
   previewHost.layer.appendChild(panel);
-  setTreePreviewElement(panel);
+  savedTrailsUi.setTreePreviewElement(panel);
   positionTreePreview(panel);
 
   pushOverlaySurface("treePreview", () => {
     panel.remove();
-    setTreePreviewElement(null);
-    if (host === previewHost) restoreSurfaceFocus(previewHost, opener);
+    savedTrailsUi.setTreePreviewElement(null);
+    if (savedTrailsUi.host === previewHost) restoreSurfaceFocus(previewHost, opener);
   });
   close.focus({ preventScroll: true });
 }
 
 export function positionTreePreview(panel: HTMLElement): void {
-  if (!host) return;
+  if (!savedTrailsUi.host) return;
   const margin = VIEWPORT_MARGIN;
-  const width = Math.min(360, Math.max(260, host.bar.getBoundingClientRect().width));
+  const width = Math.min(360, Math.max(260, savedTrailsUi.host.bar.getBoundingClientRect().width));
   panel.style.width = `${width}px`;
-  const anchor = librarySession?.panel ?? host.bar;
+  const anchor = savedTrailsUi.librarySession?.panel ?? savedTrailsUi.host.bar;
   const anchorRect = anchor.getBoundingClientRect();
   const rightSpace = window.innerWidth - anchorRect.right - LIBRARY_PANEL_GAP - margin;
   const leftSpace = anchorRect.left - LIBRARY_PANEL_GAP - margin;

@@ -7,7 +7,7 @@ import {
   hasOverlaySurface,
 } from "./overlaySurfaces";
 import { openLibraryPanel } from "./savedTrailsLibrary";
-import { setHost, type SavedTrailsHost } from "./savedTrailsSession";
+import { savedTrailsUi, type SavedTrailsHost } from "./savedTrailsSession";
 
 export {
   LIBRARY_EMPTY_COPY,
@@ -17,12 +17,12 @@ export {
 export { openSaveTrailDialog } from "./savedTrailsDialogs";
 
 export function bindSavedTrailsHost(next: SavedTrailsHost): void {
-  setHost(next);
+  savedTrailsUi.setHost(next);
 }
 
 export function unbindSavedTrailsHost(): void {
-  setHost(null);
   closeAllSavedTrailSurfaces();
+  savedTrailsUi.clear();
 }
 
 export function closeAllSavedTrailSurfaces(): void {

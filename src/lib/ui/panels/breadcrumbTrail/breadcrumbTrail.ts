@@ -1,7 +1,7 @@
 // Compact vertical branch overlay showing the tab's navigation trail. Built
 // on the shared Shadow DOM panel host so it stays isolated from page styles,
 // but deliberately NON-modal. Saved-trails library/name/tree UI lives in
-// savedTrailsPanel.ts; this file hosts the live bar, iframe preview, and menus.
+// savedTrailsPanel.ts; this file hosts the live bar, row menus, and wiring.
 
 import styles from "./breadcrumbTrail.css";
 import savedTrailStyles from "./savedTrailsPanel.css";
@@ -17,9 +17,17 @@ import {
 } from "../../../common/utils/panelHost";
 import { formatTrailTimestamp } from "../../../core/trail/trailCore";
 import { showContextMenu } from "./contextMenu";
-import { clampInViewport, startFreePixelDrag } from "./freePixelDrag";
 import { scheduleFocusWhenIdle } from "./focusRestore";
 import { installOverlayInteractionShield } from "./interactionShield";
+import {
+  clearLiveNotices,
+  showLiveNotice,
+  type LiveNoticeHost,
+} from "./liveTrailNotices";
+import {
+  createLiveTrailPreview,
+  type LiveTrailPreviewController,
+} from "./liveTrailPreview";
 import {
   closeAllOverlaySurfaces,
   closeOverlaySurface,
@@ -58,28 +66,20 @@ export interface BreadcrumbTrailOptions {
 }
 
 const DEFAULT_POSITION: TabTrailOverlayPosition = { xPercent: 50, yPercent: 8 };
-const PREVIEW_VIEWPORT_MARGIN = 12;
-const PREVIEW_GAP = 12;
-const PREVIEW_SIDE_MIN_WIDTH = 460;
-const PREVIEW_DESKTOP_WIDTH = 640;
-const PREVIEW_DESKTOP_HEIGHT = 520;
 
-interface OverlaySession {
-  shadow: ShadowRoot;
-  bar: HTMLDivElement;
-  layer: HTMLDivElement;
+interface OverlaySession extends LiveNoticeHost {
   options: BreadcrumbTrailOptions;
   state: TrailState;
   expanded: boolean;
   position: TabTrailOverlayPosition;
-  noticeStack: HTMLDivElement;
-  statusNoticeCleanup: (() => void) | null;
-  undoNoticeCleanups: Set<() => void>;
   liveRenderPending: boolean;
+  preview: LiveTrailPreviewController;
 }
 
 let session: OverlaySession | null = null;
 let mainDragStop: (() => void) | null = null;
+let liveMenuTrigger: HTMLElement | null = null;
+let liveMenuIndex: number | null = null;
 
 export function isBreadcrumbTrailOpen(): boolean {
   return session !== null;
@@ -92,10 +92,15 @@ export function hideBreadcrumbTrail(): void {
 
 export function updateBreadcrumbTrail(state: TrailState): void {
   if (!session) return;
+  const previous = session.state;
   session.state = state;
   if (isOverlaySurfaceBlockingLiveRender()) {
     session.liveRenderPending = true;
     setLiveInteractionBlocked(true);
+    return;
+  }
+  if (canPatchLiveTrail(previous, state, session)) {
+    patchLiveTrail(previous, state);
     return;
   }
   renderBar();
@@ -142,6 +147,11 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
   noticeStack.dataset.tabtrailScrollRegion = "";
   layer.appendChild(noticeStack);
 
+  const preview = createLiveTrailPreview(
+    () => session?.layer ?? null,
+    () => session?.bar ?? null,
+  );
+
   session = {
     shadow,
     bar,
@@ -154,6 +164,7 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
     statusNoticeCleanup: null,
     undoNoticeCleanups: new Set(),
     liveRenderPending: false,
+    preview,
   };
 
   bindSavedTrailsHost({
@@ -165,7 +176,7 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
     hideTrail: hideBreadcrumbTrail,
     closeLiveSurfaces: () => {
       closeOverlaySurface("menu");
-      closeEntryPreview();
+      preview.close();
     },
     flushLiveTrailUpdates: () => {
       queueMicrotask(() => {
@@ -185,8 +196,8 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
     event.preventDefault();
     event.stopImmediatePropagation();
     if (closeTopOverlaySurface()) return;
-    if (previewElement) {
-      closeEntryPreview(true);
+    if (session.preview.isOpen()) {
+      session.preview.close(true);
       return;
     }
     hideBreadcrumbTrail();
@@ -198,15 +209,22 @@ export function showBreadcrumbTrail(state: TrailState, options: BreadcrumbTrailO
     mainDragStop?.();
     mainDragStop = null;
     removeInteractionShield();
-    session?.statusNoticeCleanup?.();
-    for (const cleanup of session?.undoNoticeCleanups ?? []) cleanup();
+    clearLiveNotices(session);
     closeAllOverlaySurfaces();
-    closeEntryPreview();
+    session?.preview.close();
     unbindSavedTrailsHost();
     const closing = session;
     session = null;
+    liveMenuTrigger = null;
+    liveMenuIndex = null;
     closing?.options.callbacks.onClose();
   });
+}
+
+function showNotice(message: string, options: SavedTrailsNoticeOptions = {}): void {
+  if (!session) return;
+  const noticeHost = session;
+  showLiveNotice(noticeHost, () => session === noticeHost, message, options);
 }
 
 function applyPosition(): void {
@@ -214,7 +232,7 @@ function applyPosition(): void {
   const { xPercent, yPercent } = session.position;
   session.bar.style.left = `${xPercent}%`;
   session.bar.style.top = `${yPercent}%`;
-  if (previewElement) positionPreviewPane(previewElement);
+  session.preview.reposition();
 }
 
 function setLiveInteractionBlocked(blocked: boolean): void {
@@ -268,7 +286,7 @@ function focusLiveControlWhenIdle(control: string): void {
   restoreLiveFocus(marker);
 }
 
-// --- Rendering ---
+// --- Topology-aware patch vs full rebuild ---
 
 function visibleIndices(state: TrailState, maxVisible: number, expanded: boolean): number[] {
   const total = state.entries.length;
@@ -294,6 +312,77 @@ function visibleIndices(state: TrailState, maxVisible: number, expanded: boolean
   return [...selected].sort((a, b) => a - b);
 }
 
+function trailStructureKey(state: TrailState): string {
+  return state.entries
+    .map((entry) => `${entry.url}\0${entry.historyBacked ? 1 : 0}\0${entry.redirected ? 1 : 0}`)
+    .join("\n");
+}
+
+function canPatchLiveTrail(
+  previous: TrailState,
+  next: TrailState,
+  current: OverlaySession,
+): boolean {
+  // Cursor/structure changes rebuild (current row is div vs button). Same
+  // topology with title/url/timestamp metadata can patch in place.
+  if (previous.cursor !== next.cursor) return false;
+  if (trailStructureKey(previous) !== trailStructureKey(next)) return false;
+  const maxVisible = current.options.settings.maxVisibleSegments;
+  const prevVisible = visibleIndices(previous, maxVisible, current.expanded).join(",");
+  const nextVisible = visibleIndices(next, maxVisible, current.expanded).join(",");
+  return prevVisible === nextVisible;
+}
+
+function forkIndexFor(state: TrailState): number {
+  return state.entries.reduce(
+    (latest, entry, index) => index > 0 && !entry.historyBacked ? index : latest,
+    -1,
+  );
+}
+
+/** Metadata-only live update. Structural/cursor changes always take renderBar(). */
+function patchLiveTrail(previous: TrailState, next: TrailState): void {
+  if (!session) return;
+  session.liveRenderPending = false;
+  setLiveInteractionBlocked(isOverlaySurfaceBlockingLiveRender());
+  const rows = session.bar.querySelectorAll<HTMLElement>(".wf-branch-row[data-trail-index]");
+  for (const row of rows) {
+    const index = Number(row.dataset.trailIndex);
+    if (!Number.isInteger(index) || index < 0 || index >= next.entries.length) continue;
+    const entry = next.entries[index];
+    const previousEntry = previous.entries[index];
+    const main = row.querySelector<HTMLElement>(".wf-branch-row-main");
+    if (main) main.dataset.liveEntryKey = liveEntryKey(entry);
+    const more = row.querySelector<HTMLElement>(".wf-row-more");
+    if (more) more.dataset.liveEntryKey = liveEntryKey(entry);
+    session.preview.update(row, entry);
+    if (liveMenuIndex === index) patchLiveMenuDetail(entry);
+
+    if (
+      !previousEntry ||
+      previousEntry.title !== entry.title ||
+      previousEntry.url !== entry.url
+    ) {
+      const title = row.querySelector(".wf-branch-entry-title");
+      const url = row.querySelector(".wf-branch-entry-url");
+      if (title) title.textContent = entryTitle(entry);
+      if (url) url.textContent = entryUrlSubtitle(entry);
+      // Fork rows embed the entry title in aria-label; refresh when title changes.
+      if (main?.hasAttribute("aria-label")) {
+        const isCurrent = index === next.cursor;
+        main.setAttribute(
+          "aria-label",
+          isCurrent
+            ? `${entryTitle(entry)}. Current page. Direct-navigation boundary; earlier pages are outside native browser history.`
+            : `${entryTitle(entry)}. Direct-navigation boundary; selecting this page navigates directly.`,
+        );
+      }
+    }
+  }
+}
+
+// --- Full render ---
+
 function renderBar(): void {
   if (!session) return;
   setLiveInteractionBlocked(isOverlaySurfaceBlockingLiveRender());
@@ -304,12 +393,12 @@ function renderBar(): void {
     ? session.shadow.activeElement
     : null;
   const menuReturnFocus = liveMenuTrigger;
-  const previewReturn = previewElement ? previewReturnFocus : null;
+  const previewReturnFocus = session.preview.focusedReturnTarget();
   closeOverlaySurface("menu");
-  closeEntryPreview();
+  session.preview.close();
   if (activeLiveControl?.dataset.liveControl) restoreLiveFocus(activeLiveControl);
   if (menuReturnFocus) restoreLiveFocus(menuReturnFocus);
-  if (previewReturn) restoreLiveFocus(previewReturn);
+  if (previewReturnFocus) restoreLiveFocus(previewReturnFocus);
   bar.textContent = "";
 
   bar.appendChild(buildBranchHeader(callbacks));
@@ -325,10 +414,7 @@ function renderBar(): void {
   }
 
   const indices = visibleIndices(state, settings.maxVisibleSegments, session.expanded);
-  const forkIndex = state.entries.reduce(
-    (latest, entry, index) => index > 0 && !entry.historyBacked ? index : latest,
-    -1,
-  );
+  const forkIndex = forkIndexFor(state);
   let previousRendered: number | null = null;
   for (const index of indices) {
     if (previousRendered !== null) {
@@ -426,97 +512,6 @@ function buildCloseButton(): HTMLElement {
   return close;
 }
 
-function restoreFocusAfterNotice(noticeSession: OverlaySession): void {
-  scheduleFocusWhenIdle(() => {
-    if (session !== noticeSession) return null;
-    const target =
-      noticeSession.noticeStack.querySelector<HTMLElement>(".wf-notice-action:not(:disabled)") ??
-      noticeSession.layer.querySelector<HTMLElement>(".wf-library-search") ??
-      noticeSession.layer.querySelector<HTMLElement>(".wf-library-row .wf-row-more") ??
-      noticeSession.bar.querySelector<HTMLElement>("[data-live-control=library]");
-    return target;
-  });
-}
-
-function showNotice(message: string, options: SavedTrailsNoticeOptions = {}): void {
-  if (!session) return;
-  const noticeSession = session;
-  const undoLane = options.undo === true;
-  if (!undoLane) noticeSession.statusNoticeCleanup?.();
-
-  const notice = document.createElement("div");
-  notice.className = `wf-notice wf-notice-${options.tone ?? "info"} ${
-    undoLane ? "wf-notice-undo" : "wf-notice-status"
-  }`;
-  notice.dataset.tabtrailHitSurface = "";
-  notice.setAttribute("role", options.tone === "error" ? "alert" : "status");
-  notice.setAttribute("aria-live", options.tone === "error" ? "assertive" : "polite");
-
-  const copy = document.createElement("span");
-  copy.className = "wf-notice-copy";
-  copy.textContent = message;
-  notice.appendChild(copy);
-
-  if (options.actionLabel && options.action) {
-    const action = document.createElement("button");
-    action.type = "button";
-    action.className = "wf-notice-action";
-    action.textContent = options.actionLabel;
-    action.addEventListener("click", () => {
-      if (!options.action || action.disabled) return;
-      action.disabled = true;
-      action.textContent = "Working…";
-      void Promise.resolve(options.action()).then(() => {
-        if (notice.isConnected) remove();
-      }).catch(() => {
-        if (session === noticeSession) {
-          showNotice("Action failed", { tone: "error", durationMs: 5000 });
-        }
-      });
-    });
-    notice.appendChild(action);
-  }
-  if (undoLane) {
-    noticeSession.noticeStack.appendChild(notice);
-  } else {
-    noticeSession.noticeStack.prepend(notice);
-  }
-
-  let remainingMs = options.durationMs ?? (options.action ? 8000 : 2200);
-  let startedAt = Date.now();
-  let timer: number | null = null;
-  const remove = (): void => {
-    const ownedFocus = notice.contains(noticeSession.shadow.activeElement);
-    if (timer != null) window.clearTimeout(timer);
-    timer = null;
-    notice.remove();
-    if (undoLane) {
-      noticeSession.undoNoticeCleanups.delete(remove);
-    } else if (noticeSession.statusNoticeCleanup === remove) {
-      noticeSession.statusNoticeCleanup = null;
-    }
-    if (ownedFocus) restoreFocusAfterNotice(noticeSession);
-  };
-  const resume = (): void => {
-    if (timer != null || remainingMs <= 0) return;
-    startedAt = Date.now();
-    timer = window.setTimeout(remove, remainingMs);
-  };
-  const pause = (): void => {
-    if (timer == null) return;
-    window.clearTimeout(timer);
-    timer = null;
-    remainingMs = Math.max(0, remainingMs - (Date.now() - startedAt));
-  };
-  notice.addEventListener("mouseenter", pause);
-  notice.addEventListener("mouseleave", resume);
-  notice.addEventListener("focusin", pause);
-  notice.addEventListener("focusout", resume);
-  if (undoLane) noticeSession.undoNoticeCleanups.add(remove);
-  else noticeSession.statusNoticeCleanup = remove;
-  resume();
-}
-
 function buildMorePill(hiddenCount: number): HTMLElement {
   const pill = document.createElement("button");
   pill.type = "button";
@@ -559,6 +554,7 @@ function buildBranchRow(
   const isCurrent = index === state.cursor;
   const row = document.createElement("div");
   row.className = "wf-branch-row";
+  row.dataset.trailIndex = String(index);
   if (isCurrent) row.classList.add("wf-branch-row-current");
   if (index > state.cursor) row.classList.add("wf-branch-row-forward");
   if (isFork) {
@@ -608,7 +604,7 @@ function buildBranchRow(
   row.appendChild(more);
 
   if (!isCurrent) {
-  main.addEventListener("click", (event) => {
+    main.addEventListener("click", (event) => {
       event.preventDefault();
       callbacks.onJump(index);
     });
@@ -618,7 +614,7 @@ function buildBranchRow(
     event.stopPropagation();
     const focusOnOpen = session?.shadow.activeElement instanceof HTMLElement &&
       row.contains(session.shadow.activeElement);
-    openEntryMenu(row, index, entry, callbacks, more, focusOnOpen);
+    openEntryMenu(row, index, callbacks, more, focusOnOpen);
   });
   return row;
 }
@@ -640,197 +636,9 @@ function buildRowMoreButton(
   more.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    toggleEntryMenu(anchor, more, index, entry, callbacks, event.detail === 0);
+    toggleEntryMenu(anchor, more, index, callbacks, event.detail === 0);
   });
   return more;
-}
-
-// --- In-page preview (live row iframe) ---
-
-let previewElement: HTMLDivElement | null = null;
-let previewedRowElement: HTMLElement | null = null;
-let previewManualPosition: { left: number; top: number } | null = null;
-let previewDragStop: (() => void) | null = null;
-let previewReturnFocus: HTMLElement | null = null;
-
-function closeEntryPreview(restore = false): void {
-  const returnFocus = previewReturnFocus;
-  previewDragStop?.();
-  previewDragStop = null;
-  previewManualPosition = null;
-  previewedRowElement?.classList.remove("wf-branch-row-previewed");
-  previewedRowElement = null;
-  previewElement?.remove();
-  previewElement = null;
-  previewReturnFocus = null;
-  if (restore) scheduleFocusWhenIdle(() => returnFocus);
-}
-
-function openEntryPreview(
-  anchor: HTMLElement | null,
-  entry: TrailEntry,
-  onOpenInNewTab: () => void,
-  returnFocus: HTMLElement | null,
-): void {
-  if (!session) return;
-  closeEntryPreview();
-  if (anchor) {
-    anchor.classList.add("wf-branch-row-previewed");
-    previewedRowElement = anchor;
-  }
-
-  const preview = document.createElement("div");
-  preview.className = "wf-preview-pane";
-  preview.dataset.tabtrailHitSurface = "";
-  preview.setAttribute("role", "dialog");
-  preview.setAttribute("aria-modal", "false");
-
-  const header = document.createElement("div");
-  header.className = "wf-preview-pane-header";
-
-  const identity = document.createElement("div");
-  identity.className = "wf-preview-pane-identity";
-
-  const kicker = document.createElement("div");
-  kicker.className = "wf-preview-pane-kicker";
-  kicker.textContent = "Preview";
-  identity.appendChild(kicker);
-
-  const title = document.createElement("div");
-  title.id = "tabtrail-live-preview-title";
-  title.className = "wf-preview-pane-title";
-  title.textContent = entryTitle(entry);
-  identity.appendChild(title);
-
-  const url = document.createElement("div");
-  url.id = "tabtrail-live-preview-url";
-  url.className = "wf-preview-pane-url";
-  url.textContent = entryUrlSubtitle(entry);
-  identity.appendChild(url);
-  preview.setAttribute("aria-labelledby", title.id);
-  preview.setAttribute("aria-describedby", url.id);
-
-  const actions = document.createElement("div");
-  actions.className = "wf-preview-pane-actions";
-
-  const drag = document.createElement("span");
-  drag.className = "wf-preview-pane-drag";
-  drag.textContent = "⠿";
-  drag.title = "Move preview pane";
-  drag.setAttribute("aria-hidden", "true");
-  drag.addEventListener("pointerdown", (event) => {
-    if (!previewElement) return;
-    previewElement.classList.remove("wf-preview-pane-bottom");
-    previewDragStop?.();
-    previewDragStop = startFreePixelDrag(previewElement, event, {
-      draggingClass: "wf-preview-pane-dragging",
-      onMove: (position) => {
-        previewManualPosition = position;
-      },
-      onEnd: () => {
-        previewDragStop = null;
-      },
-    });
-  });
-
-  const open = document.createElement("button");
-  open.className = "wf-preview-pane-action";
-  open.type = "button";
-  open.textContent = "↗";
-  open.title = "Open in new tab";
-  open.setAttribute("aria-label", "Open previewed page in a new tab");
-  open.addEventListener("click", () => onOpenInNewTab());
-
-  const close = document.createElement("button");
-  close.className = "wf-preview-pane-close";
-  close.type = "button";
-  close.textContent = "✕";
-  close.title = "Close preview";
-  close.setAttribute("aria-label", "Close page preview");
-  close.addEventListener("click", () => closeEntryPreview(true));
-
-  actions.appendChild(drag);
-  actions.appendChild(open);
-  actions.appendChild(close);
-
-  header.appendChild(identity);
-  header.appendChild(actions);
-
-  const frame = document.createElement("iframe");
-  frame.className = "wf-preview-pane-frame";
-  frame.title = `Preview: ${entryTitle(entry)}`;
-  frame.referrerPolicy = "no-referrer";
-  frame.setAttribute("sandbox", "allow-forms allow-popups allow-same-origin allow-scripts");
-  frame.src = entry.url;
-
-  preview.appendChild(header);
-  preview.appendChild(frame);
-  session.layer.appendChild(preview);
-  positionPreviewPane(preview);
-  previewElement = preview;
-  previewReturnFocus = returnFocus;
-  close.focus({ preventScroll: true });
-}
-
-function positionPreviewPane(preview: HTMLElement): void {
-  if (!session) return;
-  const barRect = session.bar.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const margin = PREVIEW_VIEWPORT_MARGIN;
-  const availableHeight = Math.max(160, viewportHeight - margin * 2);
-  const rightSpace = viewportWidth - barRect.right - PREVIEW_GAP - margin;
-  const leftSpace = barRect.left - PREVIEW_GAP - margin;
-  const canUseRight = viewportWidth >= 760 && rightSpace >= PREVIEW_SIDE_MIN_WIDTH;
-  const canUseLeft = viewportWidth >= 760 && leftSpace >= PREVIEW_SIDE_MIN_WIDTH;
-
-  preview.classList.remove("wf-preview-pane-bottom");
-
-  if (previewManualPosition) {
-    const rect = preview.getBoundingClientRect();
-    const position = clampInViewport(
-      previewManualPosition.left,
-      previewManualPosition.top,
-      rect.width || PREVIEW_DESKTOP_WIDTH,
-      rect.height || PREVIEW_DESKTOP_HEIGHT,
-      margin,
-    );
-    previewManualPosition = position;
-    preview.style.left = `${position.left}px`;
-    preview.style.top = `${position.top}px`;
-    return;
-  }
-
-  preview.style.width = "";
-  preview.style.height = "";
-  preview.style.left = "";
-  preview.style.top = "";
-
-  if (canUseRight || canUseLeft) {
-    const useRight = canUseRight && (!canUseLeft || rightSpace >= leftSpace);
-    const availableWidth = useRight ? rightSpace : leftSpace;
-    const width = Math.min(PREVIEW_DESKTOP_WIDTH, availableWidth);
-    const height = Math.min(PREVIEW_DESKTOP_HEIGHT, availableHeight);
-    const left = useRight ? barRect.right + PREVIEW_GAP : barRect.left - PREVIEW_GAP - width;
-    const top = Math.min(
-      Math.max(margin, barRect.top),
-      Math.max(margin, viewportHeight - height - margin),
-    );
-    preview.style.width = `${width}px`;
-    preview.style.height = `${height}px`;
-    preview.style.left = `${left}px`;
-    preview.style.top = `${top}px`;
-    return;
-  }
-
-  preview.classList.add("wf-preview-pane-bottom");
-  const width = Math.max(0, viewportWidth - margin * 2);
-  const targetHeight = Math.round(viewportHeight * 0.66);
-  const height = Math.min(Math.max(260, targetHeight), availableHeight);
-  preview.style.width = `${width}px`;
-  preview.style.height = `${height}px`;
-  preview.style.left = `${margin}px`;
-  preview.style.top = `${Math.max(margin, viewportHeight - height - margin)}px`;
 }
 
 // --- Live row context menu ---
@@ -839,33 +647,36 @@ function toggleEntryMenu(
   anchor: HTMLElement,
   trigger: HTMLElement,
   index: number,
-  entry: TrailEntry,
   callbacks: BreadcrumbTrailCallbacks,
   focusOnOpen: boolean,
 ): void {
-  // Toggle: if this trigger already owns the open menu, close it.
   if (liveMenuTrigger === trigger) {
     closeOverlaySurface("menu");
     return;
   }
-  openEntryMenu(anchor, index, entry, callbacks, trigger, focusOnOpen);
+  openEntryMenu(anchor, index, callbacks, trigger, focusOnOpen);
 }
-
-let liveMenuTrigger: HTMLElement | null = null;
 
 function openEntryMenu(
   anchor: HTMLElement,
   index: number,
-  entry: TrailEntry,
   callbacks: BreadcrumbTrailCallbacks,
   trigger: HTMLElement,
   focusOnOpen: boolean,
 ): void {
   if (!session) return;
+  const entry = session.state.entries[index];
+  if (!entry) return;
   closeOverlaySurface("menu");
 
   let closed = false;
   liveMenuTrigger = trigger;
+  liveMenuIndex = index;
+  const menuSession = session;
+  const currentEntry = (): TrailEntry | null => {
+    if (session !== menuSession) return null;
+    return menuSession.state.entries[index] ?? null;
+  };
   const handle = showContextMenu({
     layer: session.layer,
     anchor,
@@ -878,12 +689,26 @@ function openEntryMenu(
     items: [
       {
         label: "Preview",
-        action: () =>
-          openEntryPreview(anchor, entry, () => callbacks.onOpenInNewTab(index), trigger),
+        action: () => {
+          const latest = currentEntry();
+          if (!latest) return;
+          menuSession.preview.open(
+            anchor,
+            latest,
+            () => callbacks.onOpenInNewTab(index),
+            trigger,
+          );
+        },
       },
       { label: "Open in new tab", action: () => callbacks.onOpenInNewTab(index) },
       { label: "Open in new window", action: () => callbacks.onOpenInNewWindow(index) },
-      { label: "Copy URL", action: () => void copyText(entry.url) },
+      {
+        label: "Copy URL",
+        action: () => {
+          const latest = currentEntry();
+          if (latest) void copyText(latest.url);
+        },
+      },
       {
         label: "Save trail up to this point in path",
         action: () => openSaveTrailDialog(index, trigger),
@@ -894,13 +719,27 @@ function openEntryMenu(
       if (closed) return;
       closed = true;
       liveMenuTrigger = null;
+      liveMenuIndex = null;
       dropOverlaySurface("menu");
     },
   });
+  handle.element.dataset.liveTrailIndex = String(index);
 
   pushOverlaySurface("menu", () => {
     if (!closed) handle.close();
   });
+}
+
+function patchLiveMenuDetail(entry: TrailEntry): void {
+  if (!session) return;
+  const menu = session.layer.querySelector<HTMLElement>(".wf-menu[data-live-trail-index]");
+  if (!menu) return;
+  const title = menu.querySelector<HTMLElement>(".wf-menu-detail-title");
+  const subtitle = menu.querySelector<HTMLElement>(".wf-menu-detail-url");
+  const meta = menu.querySelector<HTMLElement>(".wf-menu-detail-time");
+  if (title) title.textContent = entryTitle(entry);
+  if (subtitle) subtitle.textContent = entry.url;
+  if (meta) meta.textContent = `Visited ${formatTrailTimestamp(entry.timestamp, Date.now())}`;
 }
 
 async function copyText(text: string): Promise<void> {

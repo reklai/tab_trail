@@ -12,10 +12,42 @@ function readText(pathFromRoot) {
 test("branch overlay includes mobile tightening and scroll containment", () => {
   const css = readText("src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.css");
   const savedCss = readText("src/lib/ui/panels/breadcrumbTrail/savedTrailsPanel.css");
+  const panelHost = readText("src/lib/common/utils/panelHost.ts");
+  const frameCss = readText("src/entryPoints/overlayFrame/overlayFrame.css");
   assert.match(css, /@media \(max-width:/);
   assert.match(css, /border-radius:\s*8px/);
   assert.match(css, /\.wf-branch-list\s*\{[\s\S]*overflow-y:\s*auto/);
   assert.match(css, /\.wf-bar\s*\{[\s\S]*overflow:\s*visible/);
+  const barStyles = css.match(/\.wf-bar\s*\{([^}]*)\}/)?.[1] ?? "";
+  assert.doesNotMatch(barStyles, /animation\s*:/);
+  assert.doesNotMatch(barStyles, /transition\s*:/);
+  assert.doesNotMatch(css, /@keyframes\s+wf-branch-in|wf-branch-in/);
+  for (const selector of ["wf-bar", "wf-preview-pane", "wf-menu"]) {
+    assert.match(css, new RegExp(`\\.${selector}\\s*\\{[^}]*border:\\s*0`));
+  }
+  for (const selector of ["wf-dialog", "wf-library-panel", "wf-trail-tree-preview"]) {
+    assert.match(savedCss, new RegExp(`\\.${selector}\\s*\\{[^}]*border:\\s*0`));
+  }
+  for (const token of [
+    "--ht-color-border",
+    "--ht-color-border-soft",
+    "--ht-color-border-faint",
+    "--ht-color-border-ultra-faint",
+  ]) {
+    assert.match(panelHost, new RegExp(`${token}:\\s*transparent`));
+  }
+  assert.match(panelHost, /--ht-shadow-overlay:\s*none/);
+  assert.match(
+    frameCss,
+    /:root,\s*\nbody\s*\{[^}]*background:\s*transparent/,
+    "the frame document must stay transparent outside rendered surfaces",
+  );
+  assert.doesNotMatch(css, /box-shadow:[^;]*rgba\(255,\s*255,\s*255/);
+  assert.match(
+    css,
+    /\.wf-preview-pane-frame\s*\{[^}]*border:\s*0[^}]*outline:\s*0[^}]*display:\s*block[^}]*background:\s*var\(--ht-color-bg\)/,
+  );
+  assert.match(css, /\.wf-notice\s*\{[^}]*border:\s*1px solid var\(--ht-color-accent\)/);
   assert.match(css, /\.wf-branch-header\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0,\s*1fr\) auto auto/);
   assert.match(css, /\.wf-settings,\s*\n\.wf-library\s*\{[\s\S]*width:\s*22px/);
   assert.match(savedCss, /\.wf-library-list\s*\{[\s\S]*overflow-y:\s*auto/);

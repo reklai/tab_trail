@@ -36,24 +36,18 @@ import {
   VIEWPORT_MARGIN,
   activeShadowElement,
   currentCapturedPath,
-  host,
-  libraryDragStop,
   libraryFocusIdentity,
-  librarySession,
-  pendingTrailIds,
-  registerRenderLibrary,
   restoreLibraryFocus,
   restoreLibraryPrimaryFocus,
   restoreSurfaceFocus,
-  setLibraryDragStop,
-  setLibrarySession,
+  savedTrailsUi,
   syncLiveInteraction,
   type LibrarySession,
 } from "./savedTrailsSession";
 
 export function openLibraryPanel(): void {
-  if (!host) return;
-  const openingHost = host;
+  if (!savedTrailsUi.host) return;
+  const openingHost = savedTrailsUi.host;
   const opener = activeShadowElement(openingHost);
   openingHost.closeLiveSurfaces();
   closeOverlaySurface("nameDialog");
@@ -93,11 +87,11 @@ export function openLibraryPanel(): void {
   grip.title = "Drag to move";
   grip.setAttribute("aria-hidden", "true");
   grip.addEventListener("pointerdown", (event) => {
-    libraryDragStop?.();
-    setLibraryDragStop(startFreePixelDrag(panel, event, {
+    savedTrailsUi.libraryDragStop?.();
+    savedTrailsUi.setLibraryDragStop(startFreePixelDrag(panel, event, {
       draggingClass: "wf-library-panel-dragging",
       onEnd: () => {
-        setLibraryDragStop(null);
+        savedTrailsUi.setLibraryDragStop(null);
       },
     }));
   });
@@ -136,7 +130,7 @@ export function openLibraryPanel(): void {
   }
 
   const savedTrailsChanged = (trails: SavedTrail[]): void => {
-    const current = librarySession;
+    const current = savedTrailsUi.librarySession;
     if (!current || current.panel !== panel) return;
     closeOverlaySurface("treePreview");
     current.loadRequest += 1;
@@ -159,10 +153,10 @@ export function openLibraryPanel(): void {
     restoreFocusOnClose: true,
     unsubscribe: () => {},
   };
-  setLibrarySession(session);
+  savedTrailsUi.setLibrarySession(session);
 
   search.addEventListener("input", () => {
-    if (librarySession !== session) return;
+    if (savedTrailsUi.librarySession !== session) return;
     session.query = search.value.trim();
     renderLibrary(session);
   });
@@ -172,8 +166,8 @@ export function openLibraryPanel(): void {
   pushOverlaySurface("library", () => {
     session.loadRequest += 1;
     session.unsubscribe();
-    libraryDragStop?.();
-    setLibraryDragStop(null);
+    savedTrailsUi.libraryDragStop?.();
+    savedTrailsUi.setLibraryDragStop(null);
     closeOverlaySurface("treePreview");
     closeOverlaySurface("menu");
     panel.remove();
@@ -181,8 +175,8 @@ export function openLibraryPanel(): void {
       opener.setAttribute("aria-expanded", "false");
       opener.removeAttribute("aria-controls");
     }
-    if (librarySession === session) setLibrarySession(null);
-    if (host === openingHost) {
+    if (savedTrailsUi.librarySession === session) savedTrailsUi.setLibrarySession(null);
+    if (savedTrailsUi.host === openingHost) {
       syncLiveInteraction(openingHost);
       openingHost.flushLiveTrailUpdates();
       if (session.restoreFocusOnClose) restoreSurfaceFocus(openingHost, opener);
@@ -205,10 +199,10 @@ async function loadLibrary(
   try {
     const trails = await session.host.client.load();
     if (
-      librarySession !== session ||
+      savedTrailsUi.librarySession !== session ||
       session.loadRequest !== request ||
       !session.panel.isConnected ||
-      host !== session.host
+      savedTrailsUi.host !== session.host
     ) return;
     session.trails = trails;
     session.state = "ready";
@@ -216,10 +210,10 @@ async function loadLibrary(
     if (focusAfterLoad) restoreLibraryPrimaryFocus(session);
   } catch (_) {
     if (
-      librarySession !== session ||
+      savedTrailsUi.librarySession !== session ||
       session.loadRequest !== request ||
       !session.panel.isConnected ||
-      host !== session.host
+      savedTrailsUi.host !== session.host
     ) return;
     session.state = "error";
     renderLibrary(session);
@@ -228,7 +222,7 @@ async function loadLibrary(
 }
 
 function renderLibrary(session: LibrarySession): void {
-  if (librarySession !== session || !session.panel.isConnected) return;
+  if (savedTrailsUi.librarySession !== session || !session.panel.isConnected) return;
   closeOverlaySurface("menu");
   const activeControl = activeShadowElement(session.host);
   const focusedRow = libraryFocusIdentity(activeControl);
@@ -314,7 +308,7 @@ function renderLibrary(session: LibrarySession): void {
   restoreRenderedFocus();
 }
 
-registerRenderLibrary(renderLibrary);
+savedTrailsUi.registerRenderLibrary(renderLibrary);
 
 function buildLibraryState(message: string, role?: "status" | "alert"): HTMLDivElement {
   const state = document.createElement("div");
@@ -327,8 +321,8 @@ function buildLibraryState(message: string, role?: "status" | "alert"): HTMLDivE
 }
 
 function positionLibraryPanel(panel: HTMLElement): void {
-  if (!host) return;
-  const barRect = host.bar.getBoundingClientRect();
+  if (!savedTrailsUi.host) return;
+  const barRect = savedTrailsUi.host.bar.getBoundingClientRect();
   const margin = VIEWPORT_MARGIN;
   const availableWidth = Math.max(0, window.innerWidth - margin * 2);
   const width = Math.min(380, Math.max(280, barRect.width), availableWidth);
@@ -371,7 +365,7 @@ function appendHighlightedText(
 function buildLibraryRow(session: LibrarySession, hit: TrailSearchHit): HTMLElement {
   const { trail, match } = hit;
   const endpoint = savedTrailEndpoint(trail);
-  const pending = pendingTrailIds.has(trail.id);
+  const pending = savedTrailsUi.pendingTrailIds.has(trail.id);
   const row = document.createElement("div");
   row.className = "wf-library-row";
   row.dataset.trailId = trail.id;
@@ -496,12 +490,12 @@ function openMenu(
   }>,
   focusOnOpen = true,
 ): void {
-  if (!host) return;
+  if (!savedTrailsUi.host) return;
   closeOverlaySurface("menu");
   let closed = false;
   libraryMenuTrigger = trigger;
   const handle = showContextMenu({
-    layer: host.layer,
+    layer: savedTrailsUi.host.layer,
     anchor,
     trigger,
     detail,

@@ -14,7 +14,7 @@
   border-radius: 8px;
   background: var(--ht-color-bg-elevated);
   color: var(--ht-color-text);
-  border: 1px solid var(--ht-color-border);
+  border: 0;
   box-shadow: var(--ht-shadow-overlay);
   display: grid;
   gap: 8px;
@@ -108,7 +108,7 @@
   border-radius: 8px;
   background: var(--ht-color-bg-elevated);
   color: var(--ht-color-text);
-  border: 1px solid var(--ht-color-border);
+  border: 0;
   box-shadow: var(--ht-shadow-overlay);
   overflow: hidden;
   backface-visibility: hidden;
@@ -364,7 +364,7 @@
   border-radius: 8px;
   background: var(--ht-color-bg-elevated);
   color: var(--ht-color-text);
-  border: 1px solid var(--ht-color-border);
+  border: 0;
   box-shadow: var(--ht-shadow-overlay);
   overflow: hidden;
 }

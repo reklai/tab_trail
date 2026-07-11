@@ -327,9 +327,91 @@ test("live trail makes the current crumb non-actionable and exposes an accessibl
     cursor: 1,
   });
   await flushMicrotasks();
-  const rebuiltRow = shadow.querySelector(".wf-branch-row .wf-branch-row-main");
-  assert.notEqual(rebuiltRow, focusedRow);
-  assert.equal(shadow.activeElement, rebuiltRow, "live updates preserve logical row focus");
+  const patchedRow = shadow.querySelector(".wf-branch-row .wf-branch-row-main");
+  // Title-only updates patch in place so open menus/previews and focus stay put.
+  assert.equal(patchedRow, focusedRow);
+  assert.equal(shadow.activeElement, patchedRow, "live updates preserve logical row focus");
+  assert.equal(
+    shadow.querySelector(".wf-branch-entry-title")?.textContent,
+    "Root page updated",
+  );
+
+  globalThis.__breadcrumbCleanup();
+  cleanup();
+  dom.window.close();
+});
+
+test("metadata patches refresh retained live menus, actions, and previews", async () => {
+  const dom = installDom();
+  const { mod, cleanup } = await loadBreadcrumbModule();
+  const now = Date.now();
+  const current = entry("https://current.test/", "Current", now - 30_000);
+  mod.showBreadcrumbTrail({
+    entries: [entry("https://root.test/start", "Original title", now - 60_000), current],
+    cursor: 1,
+  }, options());
+
+  const shadow = globalThis.__breadcrumbHost.shadowRoot;
+  const more = shadow.querySelector(".wf-branch-row .wf-row-more");
+  more.click();
+  const menu = shadow.querySelector(".wf-menu");
+  const originalMeta = menu.querySelector(".wf-menu-detail-time").textContent;
+
+  mod.updateBreadcrumbTrail({
+    entries: [entry("https://root.test/start", "Patched title", now - 7_200_000), current],
+    cursor: 1,
+  });
+
+  assert.equal(shadow.querySelector(".wf-menu"), menu, "the open menu stays in place");
+  assert.equal(menu.querySelector(".wf-menu-detail-title").textContent, "Patched title");
+  assert.notEqual(menu.querySelector(".wf-menu-detail-time").textContent, originalMeta);
+
+  [...menu.querySelectorAll(".wf-menu-item")]
+    .find((item) => item.textContent === "Preview")
+    .click();
+  const preview = shadow.querySelector(".wf-preview-pane");
+  assert.equal(preview.querySelector(".wf-preview-pane-title").textContent, "Patched title");
+  assert.equal(preview.querySelector("iframe").title, "Preview: Patched title");
+
+  mod.updateBreadcrumbTrail({
+    entries: [entry("https://root.test/start", "Newest title", now - 14_400_000), current],
+    cursor: 1,
+  });
+
+  assert.equal(shadow.querySelector(".wf-preview-pane"), preview, "the preview stays open");
+  assert.equal(preview.querySelector(".wf-preview-pane-title").textContent, "Newest title");
+  assert.equal(preview.querySelector("iframe").title, "Preview: Newest title");
+
+  globalThis.__breadcrumbCleanup();
+  cleanup();
+  dom.window.close();
+});
+
+test("a structural rebuild restores focus to the preview's logical opener", async () => {
+  const dom = installDom();
+  const { mod, cleanup } = await loadBreadcrumbModule();
+  const root = entry("https://root.test/start", "Root", 1000);
+  const second = entry("https://second.test/", "Second", 2000);
+  mod.showBreadcrumbTrail({ entries: [root, second], cursor: 1 }, options());
+
+  const shadow = globalThis.__breadcrumbHost.shadowRoot;
+  const oldOpener = shadow.querySelector(".wf-branch-row .wf-row-more");
+  oldOpener.click();
+  [...shadow.querySelectorAll(".wf-menu-item")]
+    .find((item) => item.textContent === "Preview")
+    .click();
+  assert.equal(shadow.activeElement, shadow.querySelector(".wf-preview-pane-close"));
+
+  mod.updateBreadcrumbTrail({
+    entries: [root, second, entry("https://third.test/", "Third", 3000)],
+    cursor: 2,
+  });
+  await flushMicrotasks();
+
+  const rebuiltOpener = shadow.querySelector(".wf-branch-row .wf-row-more");
+  assert.notEqual(rebuiltOpener, oldOpener);
+  assert.equal(shadow.querySelector(".wf-preview-pane"), null);
+  assert.equal(shadow.activeElement, rebuiltOpener);
 
   globalThis.__breadcrumbCleanup();
   cleanup();
@@ -596,6 +678,70 @@ test("blocking saved surfaces disable stale rows and flush the newest state on c
   assert.equal(pageInputs, 1);
   assert.equal(pageWheels, 1);
   assert.equal(pageInput.value, "page sentinely");
+
+  globalThis.__breadcrumbCleanup();
+  cleanup();
+  dom.window.close();
+});
+
+test("saved-trail mutation ownership survives overlay hibernation", async () => {
+  const dom = installDom();
+  const { mod, cleanup } = await loadIntegratedBreadcrumbModule();
+  const saved = {
+    id: "saved-one",
+    name: "Saved one",
+    pinned: false,
+    createdAt: 1000,
+    updatedAt: 1000,
+    entries: [entry("https://saved.test/", "Saved page", 1000)],
+  };
+  let resolveFirstMutation;
+  const firstMutation = new Promise((resolve) => {
+    resolveFirstMutation = resolve;
+  });
+  let pinCalls = 0;
+  const client = {
+    async load() { return [saved]; },
+    subscribe() { return () => {}; },
+    async setPinned() {
+      pinCalls += 1;
+      if (pinCalls === 1) return firstMutation;
+      return { ok: true, trails: [{ ...saved, pinned: true }] };
+    },
+  };
+  const liveState = {
+    entries: [entry("https://current.test/", "Current", 2000)],
+    cursor: 0,
+  };
+  const trailOptions = { ...options(), savedTrailsClient: client };
+
+  mod.showBreadcrumbTrail(liveState, trailOptions);
+  let shadow = globalThis.__breadcrumbHost.shadowRoot;
+  shadow.querySelector("[data-live-control=library]").click();
+  await flushTasks();
+  shadow.querySelector(".wf-library-pin").click();
+  await flushMicrotasks();
+  assert.equal(pinCalls, 1);
+  assert.equal(shadow.querySelector(".wf-library-pin").disabled, true);
+
+  globalThis.__breadcrumbCleanup();
+  mod.showBreadcrumbTrail(liveState, trailOptions);
+  shadow = globalThis.__breadcrumbHost.shadowRoot;
+  shadow.querySelector("[data-live-control=library]").click();
+  await flushTasks();
+
+  const pendingPin = shadow.querySelector(".wf-library-pin");
+  assert.equal(pendingPin.disabled, true, "the reopened overlay retains the in-flight owner");
+  pendingPin.click();
+  assert.equal(pinCalls, 1, "a second mutation cannot overlap the first");
+
+  resolveFirstMutation({ ok: true, trails: [{ ...saved, pinned: true }] });
+  await flushTasks();
+  const releasedPin = shadow.querySelector(".wf-library-pin");
+  assert.equal(releasedPin.disabled, false, "settling the owner refreshes the reopened library");
+  releasedPin.click();
+  await flushTasks();
+  assert.equal(pinCalls, 2);
 
   globalThis.__breadcrumbCleanup();
   cleanup();

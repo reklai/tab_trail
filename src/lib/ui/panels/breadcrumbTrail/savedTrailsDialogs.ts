@@ -17,14 +17,10 @@ import {
   acceptAuthoritativeTrails,
   activeShadowElement,
   currentCapturedPath,
-  host,
-  librarySession,
-  pendingTrailIds,
-  renderLibrary,
   restoreLibraryFocus,
   restoreSurfaceFocus,
+  savedTrailsUi,
   syncLiveInteraction,
-  allocateDialogId,
   type LibrarySession,
   type SavedTrailsHost,
 } from "./savedTrailsSession";
@@ -92,7 +88,7 @@ interface MutationDialogOptions {
 }
 
 export function createManagedDialogShell(options: ManagedDialogShellOptions): ManagedDialogShell {
-  const dialogId = `${options.idPrefix}-${allocateDialogId()}`;
+  const dialogId = `${options.idPrefix}-${savedTrailsUi.allocateDialogId()}`;
   const titleId = `${dialogId}-title`;
   const summaryId = `${dialogId}-summary`;
   const dialog = document.createElement("div");
@@ -166,12 +162,12 @@ export function createManagedDialogShell(options: ManagedDialogShellOptions): Ma
 }
 
 export function openMutationDialog(options: MutationDialogOptions): void {
-  if (!host) return;
-  const dialogHost = host;
-  const dialogSession = librarySession;
+  if (!savedTrailsUi.host) return;
+  const dialogHost = savedTrailsUi.host;
+  const dialogSession = savedTrailsUi.librarySession;
   if (options.closeLiveSurfaces) dialogHost.closeLiveSurfaces();
   if (options.closeLibrary) {
-    if (librarySession) librarySession.restoreFocusOnClose = false;
+    if (savedTrailsUi.librarySession) savedTrailsUi.librarySession.restoreFocusOnClose = false;
     closeOverlaySurface("library");
   }
   closeOverlaySurface("treePreview");
@@ -181,18 +177,25 @@ export function openMutationDialog(options: MutationDialogOptions): void {
   const shell = createManagedDialogShell(options.shell);
   const { dialog, input, submit: submitButton } = shell;
   let submitting = false;
+  let mutationOwner: symbol | null = null;
 
   const submit = (): void => {
     if (submitting) return;
+    if (options.trailId) {
+      mutationOwner = savedTrailsUi.beginTrailMutation(options.trailId);
+      if (!mutationOwner) {
+        shell.showError("Another change to this trail is still in progress");
+        return;
+      }
+    }
     submitting = true;
     shell.setPending(true);
     const mutationGeneration = dialogSession?.loadRequest;
-    if (options.trailId) {
-      pendingTrailIds.add(options.trailId);
-      if (librarySession) renderLibrary(librarySession);
+    if (mutationOwner && savedTrailsUi.librarySession) {
+      savedTrailsUi.renderLibrary(savedTrailsUi.librarySession);
     }
     void options.submit(input?.value).then((result) => {
-      if (host !== dialogHost) return;
+      if (savedTrailsUi.host !== dialogHost) return;
       if (!result.ok) {
         if (dialog.isConnected) {
           shell.showError(result.reason);
@@ -206,7 +209,7 @@ export function openMutationDialog(options: MutationDialogOptions): void {
       if (dialog.isConnected) closeOverlaySurface("nameDialog");
       options.onSuccess(result, dialogHost, dialogSession);
     }).catch(() => {
-      if (host !== dialogHost) return;
+      if (savedTrailsUi.host !== dialogHost) return;
       if (!dialog.isConnected) {
         dialogHost.showNotice(options.failureMessage, { tone: "error", durationMs: 5000 });
         return;
@@ -214,15 +217,15 @@ export function openMutationDialog(options: MutationDialogOptions): void {
       shell.showError(options.failureMessage);
       submitting = false;
     }).finally(() => {
-      if (!options.trailId) return;
-      pendingTrailIds.delete(options.trailId);
-      if (host === dialogHost && dialogSession && librarySession === dialogSession) {
-        renderLibrary(dialogSession);
-      }
+      if (!options.trailId || !mutationOwner) return;
+      const released = savedTrailsUi.finishTrailMutation(options.trailId, mutationOwner);
+      mutationOwner = null;
+      const currentSession = savedTrailsUi.librarySession;
+      if (released && currentSession) savedTrailsUi.renderLibrary(currentSession);
       if (
-        host === dialogHost &&
+        savedTrailsUi.host === dialogHost &&
         dialogSession &&
-        librarySession === dialogSession &&
+        currentSession === dialogSession &&
         !dialog.isConnected
       ) {
         restoreLibraryFocus({ trailId: options.trailId, action: "more" }, true);
@@ -239,7 +242,7 @@ export function openMutationDialog(options: MutationDialogOptions): void {
   dialogHost.layer.appendChild(dialog);
   pushOverlaySurface("nameDialog", () => {
     dialog.remove();
-    if (host !== dialogHost) return;
+    if (savedTrailsUi.host !== dialogHost) return;
     syncLiveInteraction(dialogHost);
     dialogHost.flushLiveTrailUpdates();
     if (options.trailId && submitting) return;
@@ -288,10 +291,10 @@ export function openSaveCapturedPathDialog(
   path: TrailEntry[] | null,
   opener: HTMLElement | null,
 ): void {
-  if (!host) return;
-  const client = host.client;
+  if (!savedTrailsUi.host) return;
+  const client = savedTrailsUi.host.client;
   if (!path || path.length === 0) {
-    host.showNotice("Nothing to save on this row", { tone: "error" });
+    savedTrailsUi.host.showNotice("Nothing to save on this row", { tone: "error" });
     return;
   }
   const endpoint = path[path.length - 1];
@@ -309,23 +312,23 @@ export function openSaveCapturedPathDialog(
 }
 
 export function openSaveTrailDialog(index: number, opener?: HTMLElement | null): void {
-  if (!host) return;
-  const state = host.getState();
+  if (!savedTrailsUi.host) return;
+  const state = savedTrailsUi.host.getState();
   openSaveCapturedPathDialog(
     slicePathToIndex(state, index),
-    opener ?? activeShadowElement(host),
+    opener ?? activeShadowElement(savedTrailsUi.host),
   );
 }
 
 export function openSaveCurrentTrailDialog(opener: HTMLElement | null): void {
-  if (!host) return;
-  const state = host.getState();
+  if (!savedTrailsUi.host) return;
+  const state = savedTrailsUi.host.getState();
   openSaveCapturedPathDialog(slicePathToIndex(state, state.cursor), opener);
 }
 
 export function openRenameDialog(trail: SavedTrail, opener: HTMLElement | null): void {
-  if (!host) return;
-  const client = host.client;
+  if (!savedTrailsUi.host) return;
+  const client = savedTrailsUi.host.client;
   openNameDialog({
     title: "Rename saved trail",
     summary: `${pagesLabel(trail.entries.length)} · current name “${trail.name}”`,
@@ -341,11 +344,11 @@ export function openRenameDialog(trail: SavedTrail, opener: HTMLElement | null):
 }
 
 export function openUpdateDialog(trail: SavedTrail, opener: HTMLElement | null): void {
-  if (!host) return;
-  const client = host.client;
+  if (!savedTrailsUi.host) return;
+  const client = savedTrailsUi.host.client;
   const path = currentCapturedPath();
   if (!path || path.length === 0) {
-    host.showNotice("The current trail has no path to save", { tone: "error" });
+    savedTrailsUi.host.showNotice("The current trail has no path to save", { tone: "error" });
     return;
   }
   const oldEndpoint = savedTrailEndpoint(trail);
@@ -397,7 +400,7 @@ export function offerUpdateUndo(
           previous.entries,
           updated.entries,
         );
-        if (host !== boundHost) return;
+        if (savedTrailsUi.host !== boundHost) return;
         if (!reverted.ok) {
           boundHost.showNotice(reverted.reason, { tone: "error", durationMs: 6000 });
           return;
@@ -405,7 +408,7 @@ export function offerUpdateUndo(
         acceptAuthoritativeTrails(reverted.trails, originSession, mutationGeneration);
         boundHost.showNotice(`Restored the previous path for “${reverted.trail.name}”`);
       } catch (_) {
-        if (host !== boundHost) return;
+        if (savedTrailsUi.host !== boundHost) return;
         boundHost.showNotice("Could not undo the update", { tone: "error", durationMs: 6000 });
       }
     },
