@@ -33,6 +33,11 @@ const shared = {
 // Each entry point produces one JS file in dist/ (paths relative to project root)
 const entryPoints = [
   { in: resolve(root, "src/entryPoints/backgroundRuntime/background.ts"), out: "background" },
+  // Chord capture runs in every frame; top-frame overlay host is a separate
+  // bundle so iframes never parse the MessagePort/iframe host stack.
+  { in: resolve(root, "src/entryPoints/contentScript/contentScriptChord.ts"), out: "contentScriptChord" },
+  { in: resolve(root, "src/entryPoints/contentScript/contentScriptTop.ts"), out: "contentScriptTop" },
+  // Combined bootstrap retained for install-time inject compatibility paths.
   { in: resolve(root, "src/entryPoints/contentScript/contentScript.ts"), out: "contentScript" },
   { in: resolve(root, "src/entryPoints/overlayFrame/overlayFrame.ts"), out: "overlayFrame/overlayFrame" },
   { in: resolve(root, "src/entryPoints/toolbarPopup/toolbarPopup.ts"), out: "toolbarPopup/toolbarPopup" },

@@ -155,15 +155,36 @@ for (const [name, manifest] of [
   ["MV2", manifestV2],
   ["MV3", manifestV3],
 ]) {
-  const contentScript = manifest.content_scripts?.[0];
-  if (contentScript?.run_at !== "document_start") {
-    errors.push(`${name} content script must run at document_start to claim the page keybind early.`);
+  const scripts = manifest.content_scripts ?? [];
+  const chord = scripts.find((entry) =>
+    Array.isArray(entry.js) && entry.js.includes("contentScriptChord.js"));
+  const top = scripts.find((entry) =>
+    Array.isArray(entry.js) && entry.js.includes("contentScriptTop.js"));
+  if (!chord) {
+    errors.push(`${name} must register contentScriptChord.js for toggle capture.`);
+  } else {
+    if (chord.run_at !== "document_start") {
+      errors.push(`${name} chord content script must run at document_start.`);
+    }
+    if (chord.all_frames !== true) {
+      errors.push(`${name} chord content script must run in all frames.`);
+    }
+    if (chord.match_about_blank !== true) {
+      errors.push(`${name} chord content script must match about:blank child frames.`);
+    }
   }
-  if (contentScript?.all_frames !== true) {
-    errors.push(`${name} content script must run in all frames so the keybind works in subframes.`);
-  }
-  if (contentScript?.match_about_blank !== true) {
-    errors.push(`${name} content script must match about:blank child frames where supported.`);
+  if (!top) {
+    errors.push(`${name} must register contentScriptTop.js for the top-frame overlay host.`);
+  } else {
+    if (top.run_at !== "document_start") {
+      errors.push(`${name} top content script must run at document_start.`);
+    }
+    if (top.all_frames !== false && top.all_frames !== undefined) {
+      // Explicit false preferred; undefined also means top-only in Chromium.
+      if (top.all_frames === true) {
+        errors.push(`${name} top content script must not inject into subframes.`);
+      }
+    }
   }
 }
 
@@ -199,6 +220,8 @@ for (const [name, manifest] of [
 }
 
 const requiredSourceFiles = [
+  "src/entryPoints/contentScript/contentScriptChord.ts",
+  "src/entryPoints/contentScript/contentScriptTop.ts",
   "src/entryPoints/contentScript/contentScript.ts",
   "src/entryPoints/backgroundRuntime/background.ts",
   "src/entryPoints/overlayFrame/overlayFrame.ts",

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { loadTsModule } from "./helpers/loadTsModule.mjs";
 
 const ROOT = process.cwd();
 
@@ -91,31 +92,83 @@ test("domain registers all three webNavigation intakes and serializes per tab", 
 });
 
 test("content script captures both trigger event kinds in capture phase and is re-injection safe", () => {
-  const source = readSource("src/lib/appInit/appInit.ts");
-  assert.match(source, /addEventListener\("keydown", keydownHandler, true\)/);
-  assert.match(source, /addEventListener\("mousedown", mousedownHandler, true\)/);
-  assert.match(source, /addEventListener\("contextmenu", mouseFollowUpHandler, true\)/);
-  assert.match(source, /matchesToggleTrigger/);
-  assert.match(source, /window\.__tabtrailCleanup/);
-  assert.match(source, /createOverlayFrameController/);
-  assert.match(source, /OVERLAY_FRAME_CHALLENGE/);
-  assert.match(source, /overlayController\?\.open\(typed\.state, settings\)/);
-  assert.match(source, /overlayController\?\.updateTrail\(typed\.state\)/);
-  assert.match(source, /HISTORY_GO/);
-  assert.match(source, /const closeOpenOverlay\s*=\s*\(\):\s*void\s*=>/);
-  assert.match(source, /document\.visibilityState !== "hidden"/);
-  assert.match(source, /document\.addEventListener\("visibilitychange", visibilityChangeHandler\)/);
-  assert.match(source, /document\.removeEventListener\("visibilitychange", visibilityChangeHandler\)/);
-  assert.match(source, /overlayController\?\.updateSettings\(settings\)/);
+  const chord = readSource("src/lib/appInit/chordCapture.ts");
+  const top = readSource("src/lib/appInit/topFrameOverlay.ts");
+  const legacy = readSource("src/lib/appInit/legacyBootstrap.ts");
+  assert.match(chord, /addEventListener\("keydown", keydownHandler, true\)/);
+  assert.match(chord, /addEventListener\("mousedown", mousedownHandler, true\)/);
+  assert.match(chord, /installMouseChordGuard\(window\)/);
+  assert.match(chord, /mouseChordGuard\.arm\(event\.button\)/);
+  assert.match(chord, /mouseChordGuard\.dispose\(\)/);
+  assert.match(chord, /toToggleTriggerEvent/);
+  assert.match(chord, /matchesToggleTrigger/);
+  assert.match(chord, /performance\.timeOrigin \+ performance\.now\(\)/);
+  assert.match(chord, /toggleTrailOverlay\(requestedAtEpochMs\)/);
+  assert.match(chord, /window\.__tabtrailChordCleanup/);
+  assert.ok(
+    chord.indexOf("retireLegacyCombinedBootstrap()")
+      < chord.indexOf('retireBootstrapCleanup("__tabtrailChordCleanup")'),
+    "chord bootstrap must retire the legacy combined listener before replacing its split listener",
+  );
+  assert.match(top, /createOverlayFrameController/);
+  assert.match(top, /OVERLAY_FRAME_CHALLENGE/);
+  assert.match(top, /overlayController\?\.open\([\s\S]*typed\.requestedAtEpochMs/);
+  assert.match(top, /overlayController\?\.updateTrail\(typed\.state\)/);
+  assert.match(top, /HISTORY_GO/);
+  assert.match(top, /const destroyOpenOverlay\s*=\s*\(\):\s*void\s*=>/);
+  assert.match(top, /mode:\s*"destroy"/);
+  assert.match(top, /mode:\s*"hibernate"/);
+  assert.match(top, /overlayController\?\.dispose\(\)/);
+  assert.match(top, /document\.visibilityState !== "hidden"/);
+  assert.match(top, /document\.addEventListener\("visibilitychange", visibilityChangeHandler\)/);
+  assert.match(top, /document\.removeEventListener\("visibilitychange", visibilityChangeHandler\)/);
+  assert.match(top, /overlayController\?\.updateSettings\(settings\)/);
+  assert.ok(
+    top.indexOf("retireLegacyCombinedBootstrap()")
+      < top.indexOf('retireBootstrapCleanup("__tabtrailTopCleanup")'),
+    "top-frame bootstrap must retire the legacy combined listener before replacing its split listener",
+  );
+  assert.match(legacy, /const cleanup = bootstrapWindow\[cleanupKey\]/);
+  assert.match(legacy, /cleanup\(\)/);
+  assert.match(legacy, /finally\s*\{\s*delete bootstrapWindow\[cleanupKey\]/);
   assert.match(
-    source,
+    top,
     /onPositionChange:\s*async \(position\)\s*=>\s*\{\s*settings = \{ \.\.\.settings, overlayPosition: position \};[\s\S]*await saveTabTrailSettings\(settings\)/,
   );
-  assert.doesNotMatch(source, /addEventListener\("blur"/);
+  assert.doesNotMatch(chord, /addEventListener\("blur"/);
+  assert.doesNotMatch(top, /addEventListener\("blur"/);
+});
+
+test("split bootstrap retirement survives invalidated cleanup hooks", async () => {
+  const previousWindow = globalThis.window;
+  globalThis.window = {};
+  try {
+    const { retireBootstrapCleanup } = await loadTsModule(
+      "src/lib/appInit/legacyBootstrap.ts",
+    );
+    for (const cleanupKey of [
+      "__tabtrailCleanup",
+      "__tabtrailChordCleanup",
+      "__tabtrailTopCleanup",
+    ]) {
+      let calls = 0;
+      window[cleanupKey] = () => {
+        calls += 1;
+        throw new Error("Extension context invalidated");
+      };
+
+      assert.doesNotThrow(() => retireBootstrapCleanup(cleanupKey));
+      assert.equal(calls, 1);
+      assert.equal(cleanupKey in window, false, `${cleanupKey} must be cleared after failure`);
+    }
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
 });
 
 test("isolated overlay host authenticates, clips, and owns focused input outside the page event path", () => {
-  const app = readSource("src/lib/appInit/appInit.ts");
+  const top = readSource("src/lib/appInit/topFrameOverlay.ts");
   const host = readSource("src/lib/ui/overlayFrame/overlayFrameController.ts");
   const frame = readSource("src/entryPoints/overlayFrame/overlayFrame.ts");
   const frameCss = readSource("src/entryPoints/overlayFrame/overlayFrame.css");
@@ -129,20 +182,32 @@ test("isolated overlay host authenticates, clips, and owns focused input outside
   assert.match(host, /focusOwned/);
   // Open is reported as soon as the host session exists so TRAIL_UPDATED is not
   // dropped during the iframe handshake; settleOpened still waits for surfaces.
-  assert.match(
-    host,
-    /session = current;[\s\S]*reportedOpen = true;[\s\S]*reportTrailOverlayState\(true\)/,
-  );
+  assert.match(host, /reportOpenState\(current, true\)/);
+  assert.match(host, /const hibernate\s*=/);
+  assert.match(host, /const resumeWarm\s*=/);
+  assert.match(host, /const armVisibleSession\s*=/);
+  assert.match(host, /OverlayCloseRequest|mode: "hibernate"|mode: "destroy"/);
+  assert.doesNotMatch(host, /isHardCloseReason|showWhenReady/);
+  assert.match(host, /HOST_HIBERNATE/);
+  assert.match(host, /HOST_SHOW/);
   assert.match(host, /if \(!current\.settled\)[\s\S]*settleOpened\(current, true\)/);
   assert.doesNotMatch(host, /SAVED_SUBSCRIBE|SAVED_UNSUBSCRIBE/);
-  assert.match(host, /Duplicate or stale overlay request/);
+  // Soft protocol path: stale RPCs are ignored; geometry failures resync.
+  assert.match(host, /Ignore stale\/duplicate request ids/);
+  assert.match(host, /requestSurfaceResync/);
+  assert.match(host, /HEARTBEAT_MISS_LIMIT/);
   assert.doesNotMatch(host, /SAVED_DUPLICATE|browserSavedTrailsClient\.duplicate/);
   assert.match(
     host,
-    /const invalidateGeometry[\s\S]*visibility", "hidden"[\s\S]*HOST_REQUEST_SURFACES/,
+    /const invalidateGeometry[\s\S]*hideFrameSurface[\s\S]*HOST_REQUEST_SURFACES/,
   );
   assert.match(frame, /claimOverlayFrame\(connection\.message\.nonce\)/);
   assert.match(frame, /FRAME_FOCUS_OWNERSHIP/);
+  assert.match(frame, /scheduleSurfaceGeometry/);
+  assert.match(frame, /installGeometryObservers/);
+  assert.match(frame, /HOST_HIBERNATE|hibernateUi/);
+  assert.match(frame, /seedHostState/);
+  assert.match(frame, /HOST_SHOW|mountTrailUi/);
   assert.match(
     frame,
     /case "HOST_REQUEST_SURFACES":[\s\S]*sendMeasuredSurfaceGeometry\(true\)/,
@@ -151,7 +216,7 @@ test("isolated overlay host authenticates, clips, and owns focused input outside
   assert.match(frameCss, /overscroll-behavior:\s*none/);
   assert.match(frame, /data-tabtrail-hit-surface/);
   assert.doesNotMatch(frame, /SAVED_DUPLICATE|\bduplicate:\s*async/);
-  assert.doesNotMatch(app, /showBreadcrumbTrail|hideBreadcrumbTrail/);
+  assert.doesNotMatch(top, /showBreadcrumbTrail|hideBreadcrumbTrail/);
 });
 
 test("trigger contract accepts left, middle, and right mouse buttons only", () => {
@@ -249,6 +314,8 @@ test("options page presents shortcut wording and reset controls", () => {
 
 test("live branch overlay hosts the bar and delegates saved trails", () => {
   const source = readSource("src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.ts");
+  const preview = readSource("src/lib/ui/panels/breadcrumbTrail/liveTrailPreview.ts");
+  const notices = readSource("src/lib/ui/panels/breadcrumbTrail/liveTrailNotices.ts");
   assert.match(source, /onOpenOptions\(\):\s*void/);
   assert.match(source, /onOpenInNewWindow\(index:\s*number\):\s*void/);
   assert.match(source, /branchList\.className\s*=\s*"wf-branch-list"/);
@@ -259,10 +326,14 @@ test("live branch overlay hosts the bar and delegates saved trails", () => {
   assert.match(source, /installOverlayInteractionShield\(shadow\)/);
   assert.match(source, /removeInteractionShield\(\)/);
   assert.match(source, /closeTopOverlaySurface/);
-  assert.match(source, /function openEntryPreview/);
-  assert.match(source, /document\.createElement\("iframe"\)/);
-  assert.match(source, /startFreePixelDrag/);
+  assert.match(source, /createLiveTrailPreview/);
+  assert.match(source, /canPatchLiveTrail/);
   assert.match(source, /showContextMenu/);
+  assert.match(preview, /document\.createElement\("iframe"\)/);
+  assert.match(preview, /startFreePixelDrag/);
+  assert.match(preview, /allow-forms allow-popups allow-scripts/);
+  assert.doesNotMatch(preview, /allow-same-origin/);
+  assert.match(notices, /showLiveNotice/);
   assert.match(
     source,
     /label:\s*"Preview"[\s\S]*label:\s*"Open in new tab"[\s\S]*label:\s*"Open in new window"[\s\S]*label:\s*"Copy URL"[\s\S]*label:\s*"Save trail up to this point in path"/,

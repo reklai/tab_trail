@@ -105,7 +105,12 @@ export function createTrailMessageHandler(
         return await claimOverlayFrame(message.nonce, sender);
 
       case "TRAIL_TOGGLE_OVERLAY":
-        return await domain.toggleOverlay(sender.tab);
+        return await domain.toggleOverlay(
+          sender.tab,
+          Number.isFinite(message.requestedAtEpochMs)
+            ? message.requestedAtEpochMs
+            : undefined,
+        );
 
       case "TRAIL_JUMP":
         return await domain.jumpTo(message.index, message.tabId, sender.tab);

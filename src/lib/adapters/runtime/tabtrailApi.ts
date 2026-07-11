@@ -12,8 +12,11 @@ import type {
   SavedTrailMutationResult,
 } from "../storage/savedTrailsStore";
 
-export async function toggleTrailOverlay(): Promise<TabTrailActionResult> {
-  return sendRuntimeMessageWithRetry<TabTrailActionResult>({ type: "TRAIL_TOGGLE_OVERLAY" });
+export async function toggleTrailOverlay(requestedAtEpochMs?: number): Promise<TabTrailActionResult> {
+  return sendRuntimeMessageWithRetry<TabTrailActionResult>({
+    type: "TRAIL_TOGGLE_OVERLAY",
+    ...(Number.isFinite(requestedAtEpochMs) ? { requestedAtEpochMs } : {}),
+  });
 }
 
 /** One-time authentication used only by the isolated overlay document. */

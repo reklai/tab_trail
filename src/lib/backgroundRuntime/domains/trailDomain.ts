@@ -53,7 +53,10 @@ type ContentScriptMessageDelivery =
 
 export interface TrailDomain {
   ensureLoaded(): Promise<void>;
-  toggleOverlay(senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
+  toggleOverlay(
+    senderTab?: Tabs.Tab,
+    requestedAtEpochMs?: number,
+  ): Promise<TabTrailActionResult>;
   jumpTo(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
   openEntryInNewTab(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
   openEntryInNewWindow(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult>;
@@ -142,10 +145,15 @@ export function createTrailDomain(): TrailDomain {
     if (staleKeys.length > 0) await mirrorStore.remove(staleKeys).catch(() => {});
   }
 
-  function mirrorTrail(tabId: number): void {
+  // Mirror always re-reads the authoritative map at write time so a queued
+  // snapshot cannot resurrect a trail after handleTabRemoved, and never races
+  // a later reducer result. All map mutations go through tabQueue so title
+  // patches and navigation events cannot interleave.
+  function scheduleMirrorTrail(tabId: number): void {
     if (incognitoTabIds.has(tabId) && !mirrorIsSessionScoped) return;
-    const state = trailsByTabId.get(tabId);
     void tabQueue.run(tabId, async () => {
+      if (incognitoTabIds.has(tabId) && !mirrorIsSessionScoped) return;
+      const state = trailsByTabId.get(tabId);
       if (!state || state.entries.length === 0) {
         await mirrorStore.remove(trailMirrorKey(tabId)).catch(() => {});
         return;
@@ -173,12 +181,19 @@ export function createTrailDomain(): TrailDomain {
   async function pushTrailToTab(
     tabId: number,
     type: "TRAIL_SHOW" | "TRAIL_UPDATED",
+    requestedAtEpochMs?: number,
   ): Promise<ContentScriptMessageDelivery> {
     const state = getTrailState(tabId);
     try {
       const response = await browser.tabs.sendMessage(
         tabId,
-        { type, state },
+        {
+          type,
+          state,
+          ...(type === "TRAIL_SHOW" && Number.isFinite(requestedAtEpochMs)
+            ? { requestedAtEpochMs }
+            : {}),
+        },
         { frameId: 0 },
       ) as unknown;
       return { delivered: true, response };
@@ -194,24 +209,37 @@ export function createTrailDomain(): TrailDomain {
 
   // --- Title / favicon patching (not known at commit time) ---
 
-  function patchCursorEntry(tabId: number, tab: Pick<Tabs.Tab, "url" | "title" | "favIconUrl">): void {
+  function applyCursorEntryPatch(
+    tabId: number,
+    tab: Pick<Tabs.Tab, "url" | "title" | "favIconUrl">,
+  ): boolean {
     const state = trailsByTabId.get(tabId);
-    if (!state || state.cursor < 0) return;
+    if (!state || state.cursor < 0) return false;
     const entry = state.entries[state.cursor];
-    if (!entry || tab.url !== entry.url) return;
+    if (!entry || tab.url !== entry.url) return false;
     const title = typeof tab.title === "string" ? tab.title : entry.title;
     const favIconUrl = typeof tab.favIconUrl === "string" ? tab.favIconUrl : entry.favIconUrl;
-    if (title === entry.title && favIconUrl === entry.favIconUrl) return;
+    if (title === entry.title && favIconUrl === entry.favIconUrl) return false;
     const entries = state.entries.slice();
     entries[state.cursor] = { ...entry, title, favIconUrl };
     trailsByTabId.set(tabId, { entries, cursor: state.cursor });
-    mirrorTrail(tabId);
-    notifyOverlayIfOpen(tabId);
+    return true;
+  }
+
+  function scheduleCursorEntryPatch(
+    tabId: number,
+    tab: Pick<Tabs.Tab, "url" | "title" | "favIconUrl">,
+  ): void {
+    void tabQueue.run(tabId, async () => {
+      if (!applyCursorEntryPatch(tabId, tab)) return;
+      scheduleMirrorTrail(tabId);
+      notifyOverlayIfOpen(tabId);
+    });
   }
 
   async function patchCursorEntryFromLiveTab(tabId: number): Promise<void> {
     const tab = await browser.tabs.get(tabId).catch(() => null);
-    if (tab) patchCursorEntry(tabId, tab);
+    if (tab) scheduleCursorEntryPatch(tabId, tab);
   }
 
   // --- Navigation event intake ---
@@ -241,14 +269,20 @@ export function createTrailDomain(): TrailDomain {
       const { state, changed } = applyNavigationEvent(getTrailState(tabId), event);
       if (!changed) return;
       trailsByTabId.set(tabId, state);
-      mirrorTrail(tabId);
+      scheduleMirrorTrail(tabId);
       notifyOverlayIfOpen(tabId);
-    }).then(() => patchCursorEntryFromLiveTab(tabId));
+    }).then(() => {
+      void patchCursorEntryFromLiveTab(tabId);
+    });
   }
 
   // --- Content script injection (mirrors the reference extension) ---
 
-  async function executeContentScriptInTab(tabId: number, allFrames: boolean): Promise<boolean> {
+  async function executeScriptFiles(
+    tabId: number,
+    files: string[],
+    allFrames: boolean,
+  ): Promise<boolean> {
     const runtimeBrowser = browser as typeof browser & {
       scripting?: ScriptingApi;
       tabs: typeof browser.tabs & {
@@ -259,16 +293,19 @@ export function createTrailDomain(): TrailDomain {
       if (runtimeBrowser.scripting?.executeScript) {
         await runtimeBrowser.scripting.executeScript({
           target: { tabId, ...(allFrames ? { allFrames: true } : {}) },
-          files: ["contentScript.js"],
+          files,
         });
         return true;
       }
       if (runtimeBrowser.tabs.executeScript) {
-        await runtimeBrowser.tabs.executeScript(tabId, {
-          file: "contentScript.js",
-          runAt: "document_start",
-          ...(allFrames ? { allFrames: true } : {}),
-        });
+        // MV2 executeScript takes one file per call.
+        for (const file of files) {
+          await runtimeBrowser.tabs.executeScript(tabId, {
+            file,
+            runAt: "document_start",
+            ...(allFrames ? { allFrames: true } : {}),
+          });
+        }
         return true;
       }
     } catch (_) {
@@ -279,8 +316,18 @@ export function createTrailDomain(): TrailDomain {
 
   async function injectContentScriptIntoTab(tab: Tabs.Tab): Promise<ContentScriptInjectionOutcome> {
     if (tab.id == null || tab.discarded === true || isPageGestureRestrictedUrl(tab.url)) return "skipped";
-    if (await executeContentScriptInTab(tab.id, true)) return "injected-all-frames";
-    return await executeContentScriptInTab(tab.id, false) ? "injected-top-frame" : "failed";
+    // Chord capture in every frame; overlay host only needs the top frame.
+    // The two split injects are independent — run them in parallel.
+    const [chordOk, topOk] = await Promise.all([
+      executeScriptFiles(tab.id, ["contentScriptChord.js"], true),
+      executeScriptFiles(tab.id, ["contentScriptTop.js"], false),
+    ]);
+    if (chordOk && topOk) return "injected-all-frames";
+    if (topOk) return "injected-top-frame";
+    // Last resort: combined bundle into the top frame only.
+    return await executeScriptFiles(tab.id, ["contentScript.js"], false)
+      ? "injected-top-frame"
+      : "failed";
   }
 
   function shouldRetryContentScriptInjection(outcome: ContentScriptInjectionOutcome): boolean {
@@ -352,8 +399,10 @@ export function createTrailDomain(): TrailDomain {
           }).state
         : state;
       trailsByTabId.set(tabId, seeded);
-      mirrorTrail(tabId);
-      patchCursorEntry(tabId, tab);
+      // Title/favicon patch runs in this same queue turn before the mirror so
+      // the first durable snapshot includes live metadata when available.
+      applyCursorEntryPatch(tabId, tab);
+      scheduleMirrorTrail(tabId);
     });
   }
 
@@ -380,15 +429,21 @@ export function createTrailDomain(): TrailDomain {
     }
   }
 
-  async function toggleOverlay(senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
+  async function toggleOverlay(
+    senderTab?: Tabs.Tab,
+    requestedAtEpochMs?: number,
+  ): Promise<TabTrailActionResult> {
     await ensureLoaded();
     const tabId = await resolveTargetTabId(undefined, senderTab);
     if (tabId == null) return { ok: false, reason: "No tab for overlay" };
-    let delivery = await pushTrailToTab(tabId, "TRAIL_SHOW");
+    const validRequestedAt = Number.isFinite(requestedAtEpochMs)
+      ? requestedAtEpochMs
+      : undefined;
+    let delivery = await pushTrailToTab(tabId, "TRAIL_SHOW", validRequestedAt);
     if (!delivery.delivered) {
       const tab = await browser.tabs.get(tabId).catch(() => null);
       if (tab && didInjectContentScript(await injectContentScriptIntoTab(tab))) {
-        delivery = await pushTrailToTab(tabId, "TRAIL_SHOW");
+        delivery = await pushTrailToTab(tabId, "TRAIL_SHOW", validRequestedAt);
       }
     }
     if (!delivery.delivered) {
@@ -570,7 +625,7 @@ export function createTrailDomain(): TrailDomain {
 
     browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       if (changeInfo.title == null && changeInfo.favIconUrl == null) return;
-      patchCursorEntry(tabId, tab);
+      scheduleCursorEntryPatch(tabId, tab);
     });
 
     browser.tabs.onRemoved.addListener((tabId) => {

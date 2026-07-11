@@ -64,7 +64,7 @@ async function loadTrailDomain() {
   return { mod, cleanup: () => rmSync(tempDir, { recursive: true, force: true }) };
 }
 
-function installBrowserHooks(sendMessage) {
+function installBrowserHooks(sendMessage, executeScript = async () => undefined) {
   const calls = { sendMessage: [], get: [], executeScript: [] };
   globalThis.__trailDomainStorageGet = async () => ({});
   globalThis.__trailDomainTabsQuery = async () => [];
@@ -78,6 +78,7 @@ function installBrowserHooks(sendMessage) {
   };
   globalThis.__trailDomainExecuteScript = async (details) => {
     calls.executeScript.push(details);
+    return executeScript(details);
   };
   return calls;
 }
@@ -116,13 +117,94 @@ test("a TRAIL_SHOW transport failure still injects and retries delivery", async 
     return { ok: true };
   });
 
-  const result = await mod.createTrailDomain().toggleOverlay({ id: 9 });
+  const requestedAtEpochMs = 12345.5;
+  const result = await mod.createTrailDomain().toggleOverlay({ id: 9 }, requestedAtEpochMs);
 
   assert.deepEqual(result, { ok: true });
   assert.equal(calls.sendMessage.length, 2);
+  for (const [, message] of calls.sendMessage) {
+    assert.equal(message.type, "TRAIL_SHOW");
+    assert.equal(message.requestedAtEpochMs, requestedAtEpochMs);
+  }
   assert.deepEqual(calls.get, [9]);
-  assert.deepEqual(calls.executeScript, [{
-    target: { tabId: 9, allFrames: true },
-    files: ["contentScript.js"],
-  }]);
+  assert.deepEqual(calls.executeScript, [
+    {
+      target: { tabId: 9, allFrames: true },
+      files: ["contentScriptChord.js"],
+    },
+    {
+      target: { tabId: 9 },
+      files: ["contentScriptTop.js"],
+    },
+  ]);
+});
+
+test("invalid overlay timing input is omitted from content-script delivery", async (t) => {
+  const { mod, cleanup } = await loadTrailDomain();
+  t.after(cleanup);
+  t.after(removeBrowserHooks);
+  const calls = installBrowserHooks(async () => ({ ok: true }));
+
+  const result = await mod.createTrailDomain().toggleOverlay({ id: 10 }, Number.POSITIVE_INFINITY);
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(calls.sendMessage.length, 1);
+  assert.equal("requestedAtEpochMs" in calls.sendMessage[0][1], false);
+});
+
+test("a chord-only split injection falls back to the combined top-frame host", async (t) => {
+  const { mod, cleanup } = await loadTrailDomain();
+  t.after(cleanup);
+  t.after(removeBrowserHooks);
+  let attempt = 0;
+  const calls = installBrowserHooks(async () => {
+    attempt += 1;
+    if (attempt === 1) throw new Error("Receiving end does not exist");
+    return { ok: true };
+  }, async (details) => {
+    if (details.files[0] === "contentScriptTop.js") {
+      throw new Error("Tab navigated before top-frame injection");
+    }
+  });
+
+  const result = await mod.createTrailDomain().toggleOverlay({ id: 11 });
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(calls.sendMessage.length, 2);
+  assert.deepEqual(calls.executeScript, [
+    {
+      target: { tabId: 11, allFrames: true },
+      files: ["contentScriptChord.js"],
+    },
+    {
+      target: { tabId: 11 },
+      files: ["contentScriptTop.js"],
+    },
+    {
+      target: { tabId: 11 },
+      files: ["contentScript.js"],
+    },
+  ]);
+});
+
+test("a chord-only injection is not treated as an overlay host when fallback fails", async (t) => {
+  const { mod, cleanup } = await loadTrailDomain();
+  t.after(cleanup);
+  t.after(removeBrowserHooks);
+  const calls = installBrowserHooks(async () => {
+    throw new Error("Receiving end does not exist");
+  }, async (details) => {
+    if (details.files[0] !== "contentScriptChord.js") {
+      throw new Error("Top-frame injection unavailable");
+    }
+  });
+
+  const result = await mod.createTrailDomain().toggleOverlay({ id: 13 });
+
+  assert.deepEqual(result, { ok: false, reason: "Overlay unavailable on this page" });
+  assert.equal(calls.sendMessage.length, 1, "delivery is not retried without an overlay host");
+  assert.deepEqual(
+    calls.executeScript.map((details) => details.files),
+    [["contentScriptChord.js"], ["contentScriptTop.js"], ["contentScript.js"]],
+  );
 });

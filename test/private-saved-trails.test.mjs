@@ -124,6 +124,28 @@ test("regular tabs retain saved-trail mutations", async (t) => {
   assert.deepEqual(storeCalls.map(([operation]) => operation), ["save"]);
 });
 
+test("toggle routing forwards only finite diagnostic timestamps", async (t) => {
+  const { mod, cleanup } = await loadHandler();
+  t.after(cleanup);
+  const calls = [];
+  const domain = {
+    toggleOverlay: async (...args) => {
+      calls.push(args);
+      return { ok: true };
+    },
+  };
+  const handler = mod.createTrailMessageHandler(domain);
+  const sender = { tab: { id: 18, incognito: false } };
+
+  await handler({ type: "TRAIL_TOGGLE_OVERLAY", requestedAtEpochMs: 123.5 }, sender);
+  await handler({ type: "TRAIL_TOGGLE_OVERLAY", requestedAtEpochMs: Number.NaN }, sender);
+
+  assert.deepEqual(calls, [
+    [sender.tab, 123.5],
+    [sender.tab, undefined],
+  ]);
+});
+
 test("opening an already supplied saved path remains non-durable in private tabs", async (t) => {
   const { mod, cleanup } = await loadHandler();
   t.after(cleanup);
