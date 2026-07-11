@@ -410,7 +410,9 @@ test("a loading frame reopened after hibernation queues a fresh show", async () 
       hostMessages.map((message) => message.type),
       ["HOST_HIBERNATE", "HOST_INIT", "HOST_SHOW"],
     );
-    assert.deepEqual(hostMessages[1].state, resumedState);
+    // HOST_INIT seeds settings only; trail state rides exclusively on HOST_SHOW.
+    assert.equal(hostMessages[1].state, undefined);
+    assert.deepEqual(hostMessages[1].settings, settings);
     assert.deepEqual(hostMessages[2].state, resumedState);
     framePort.postMessage({
       type: "FRAME_SURFACES_UPDATED",
@@ -509,5 +511,215 @@ test("open diagnostics settle once per cold or warm attempt and reset stale late
     assert.ok(Number(host.getAttribute("data-tabtrail-host-open-latency-ms")) >= 0);
     assert.equal(host.hasAttribute("data-tabtrail-toggle-latency-ms"), false);
     controller.close({ mode: "destroy", reason: "test complete" });
+  });
+});
+
+const DEFAULT_SETTINGS = {
+  trigger: {
+    modifier: "alt",
+    withShift: false,
+    kind: "keyboard",
+    keyCode: "KeyH",
+    mouseButton: 2,
+  },
+  overlayPosition: null,
+  maxVisibleSegments: 8,
+};
+
+async function settleVisible(controller, connection, dom, state = { entries: [], cursor: -1 }) {
+  const opened = controller.open(state, DEFAULT_SETTINGS);
+  const host = document.getElementById("tabtrail-isolated-overlay-host");
+  const frame = host.shadowRoot.querySelector("iframe");
+  frame.dispatchEvent(new dom.window.Event("load"));
+  const { message: connectMessage, port: framePort } = connection();
+  assert.equal(controller.authorizeClaim(connectMessage.nonce).ok, true);
+  const hostMessages = [];
+  framePort.addEventListener("message", (event) => hostMessages.push(event.data));
+  framePort.start();
+  framePort.postMessage({ type: "FRAME_READY", version: PROTOCOL_VERSION });
+  framePort.postMessage({
+    type: "FRAME_SURFACES_UPDATED",
+    version: PROTOCOL_VERSION,
+    sequence: 0,
+    viewportWidth: dom.window.innerWidth,
+    viewportHeight: dom.window.innerHeight,
+    rects: [{ x: 10, y: 10, width: 120, height: 40 }],
+  });
+  assert.equal(await opened, true);
+  return { host, frame, framePort, hostMessages };
+}
+
+test("updateTrail while hibernated is delivered on warm HOST_SHOW", async () => {
+  await withOverlayControllerDom("<button>Page</button>", async ({ dom, controller, connection }) => {
+    const { framePort, hostMessages } = await settleVisible(controller, connection, dom);
+    controller.close({ mode: "hibernate" });
+    assert.equal(controller.isOpen(), false);
+
+    const updated = {
+      entries: [{ id: "a", url: "https://example.test/a", title: "A" }],
+      cursor: 0,
+    };
+    controller.updateTrail(updated);
+    hostMessages.length = 0;
+
+    const warmOpened = controller.open(updated, DEFAULT_SETTINGS);
+    assert.equal(controller.isOpen(), true);
+    const show = hostMessages.find((message) => message.type === "HOST_SHOW");
+    assert.ok(show, "warm reopen posts HOST_SHOW");
+    assert.deepEqual(show.state, updated);
+
+    framePort.postMessage({
+      type: "FRAME_SURFACES_UPDATED",
+      version: PROTOCOL_VERSION,
+      sequence: 0,
+      viewportWidth: dom.window.innerWidth,
+      viewportHeight: dom.window.innerHeight,
+      rects: [{ x: 10, y: 10, width: 120, height: 40 }],
+    });
+    assert.equal(await warmOpened, true);
+    controller.close({ mode: "destroy", reason: "test complete" });
+  });
+});
+
+test("destroy during pending open settles false and removes the host", async () => {
+  await withOverlayControllerDom("<button>Page</button>", async ({ controller }) => {
+    const opened = controller.open({ entries: [], cursor: -1 }, DEFAULT_SETTINGS);
+    assert.ok(document.getElementById("tabtrail-isolated-overlay-host"));
+    controller.close({ mode: "destroy", reason: "Page became unavailable" });
+    assert.equal(await opened, false);
+    assert.equal(document.getElementById("tabtrail-isolated-overlay-host"), null);
+    assert.equal(controller.getDiagnostics().lastFaultReason, "Page became unavailable");
+  });
+});
+
+test("host open while visible-unsettled returns the same promise", async () => {
+  await withOverlayControllerDom("<button>Page</button>", async ({ controller }) => {
+    const first = controller.open({ entries: [], cursor: -1 }, DEFAULT_SETTINGS);
+    assert.equal(controller.isOpen(), true);
+    const second = controller.open(
+      { entries: [{ id: "x", url: "https://example.test/", title: "X" }], cursor: 0 },
+      DEFAULT_SETTINGS,
+    );
+    assert.equal(second, first, "idempotent open while visible returns the same promise");
+    controller.close({ mode: "destroy", reason: "test complete" });
+    assert.equal(await first, false);
+  });
+});
+
+test("TRAIL_SHOW-style mid-handshake toggle hibernates rather than double-opening", async () => {
+  await withOverlayControllerDom("<button>Page</button>", async ({ dom, controller, connection }) => {
+    const opened = controller.open({ entries: [], cursor: -1 }, DEFAULT_SETTINGS);
+    const host = document.getElementById("tabtrail-isolated-overlay-host");
+    const frame = host.shadowRoot.querySelector("iframe");
+    frame.dispatchEvent(new dom.window.Event("load"));
+    const { message: connectMessage, port: framePort } = connection();
+    assert.equal(controller.authorizeClaim(connectMessage.nonce).ok, true);
+    framePort.start();
+    // Visible before surfaces settle — content TRAIL_SHOW uses isOpen() → hibernate.
+    assert.equal(controller.isOpen(), true);
+    controller.close({ mode: "hibernate" });
+    assert.equal(controller.isOpen(), false);
+    assert.equal(await opened, false);
+    assert.ok(document.getElementById("tabtrail-isolated-overlay-host"), "hibernate keeps the host");
+    controller.close({ mode: "destroy", reason: "test complete" });
+  });
+});
+
+test("LIVE_CLOSE during surface handshake hibernates and settles false", async () => {
+  await withOverlayControllerDom("<button>Page</button>", async ({ dom, controller, connection }) => {
+    const opened = controller.open({ entries: [], cursor: -1 }, DEFAULT_SETTINGS);
+    const host = document.getElementById("tabtrail-isolated-overlay-host");
+    const frame = host.shadowRoot.querySelector("iframe");
+    frame.dispatchEvent(new dom.window.Event("load"));
+    const { message: connectMessage, port: framePort } = connection();
+    assert.equal(controller.authorizeClaim(connectMessage.nonce).ok, true);
+    framePort.start();
+    framePort.postMessage({ type: "FRAME_READY", version: PROTOCOL_VERSION });
+    assert.equal(controller.isOpen(), true);
+
+    framePort.postMessage({
+      type: "FRAME_RPC_REQUEST",
+      version: PROTOCOL_VERSION,
+      request: { requestId: 1, method: "LIVE_CLOSE", params: {} },
+    });
+    // executeRpc + response post + queueMicrotask(hibernate) need a few turns.
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    assert.equal(controller.isOpen(), false);
+    assert.equal(await opened, false);
+    assert.ok(document.getElementById("tabtrail-isolated-overlay-host"));
+    controller.close({ mode: "destroy", reason: "test complete" });
+  });
+});
+
+test("hibernated mid-load reopen reuses the host with cold open kind", async () => {
+  await withOverlayControllerDom("<button>Page</button>", async ({ dom, controller, connection }) => {
+    const initialOpened = controller.open({ entries: [], cursor: -1 }, DEFAULT_SETTINGS);
+    const host = document.getElementById("tabtrail-isolated-overlay-host");
+    const frame = host.shadowRoot.querySelector("iframe");
+    frame.dispatchEvent(new dom.window.Event("load"));
+    const { message: connectMessage, port: framePort } = connection();
+    assert.equal(controller.authorizeClaim(connectMessage.nonce).ok, true);
+    framePort.start();
+
+    controller.close({ mode: "hibernate" });
+    assert.equal(await initialOpened, false);
+
+    const resumed = {
+      entries: [{ id: "r", url: "https://example.test/r", title: "R" }],
+      cursor: 0,
+    };
+    const resumedOpened = controller.open(resumed, DEFAULT_SETTINGS);
+    assert.equal(
+      document.getElementById("tabtrail-isolated-overlay-host"),
+      host,
+      "mid-load reopen reuses the loading host",
+    );
+    assert.equal(host.getAttribute("data-tabtrail-open-kind"), "cold");
+    assert.equal(controller.getDiagnostics().lastOpenKind, "cold");
+
+    framePort.postMessage({ type: "FRAME_READY", version: PROTOCOL_VERSION });
+    framePort.postMessage({
+      type: "FRAME_SURFACES_UPDATED",
+      version: PROTOCOL_VERSION,
+      sequence: 0,
+      viewportWidth: dom.window.innerWidth,
+      viewportHeight: dom.window.innerHeight,
+      rects: [{ x: 10, y: 10, width: 120, height: 40 }],
+    });
+    assert.equal(await resumedOpened, true);
+    controller.close({ mode: "destroy", reason: "test complete" });
+  });
+});
+
+test("getDiagnostics records resync count and survives host removal", async () => {
+  await withOverlayControllerDom("<button>Page</button>", async ({ dom, controller, connection }) => {
+    const { framePort } = await settleVisible(controller, connection, dom);
+    const before = controller.getDiagnostics().surfaceResyncCount;
+    // Viewport mismatch triggers soft resync.
+    framePort.postMessage({
+      type: "FRAME_SURFACES_UPDATED",
+      version: PROTOCOL_VERSION,
+      sequence: 1,
+      viewportWidth: 1,
+      viewportHeight: 1,
+      rects: [{ x: 0, y: 0, width: 10, height: 10 }],
+    });
+    assert.equal(controller.getDiagnostics().surfaceResyncCount, before + 1);
+
+    controller.close({ mode: "hibernate" });
+    assert.equal(
+      controller.getDiagnostics().surfaceResyncCount,
+      before + 1,
+      "hibernate keeps the last visible-session resync total",
+    );
+
+    controller.close({ mode: "destroy", reason: "Browser does not support isolated overlay hit testing" });
+    assert.equal(document.getElementById("tabtrail-isolated-overlay-host"), null);
+    const diagnostics = controller.getDiagnostics();
+    assert.equal(
+      diagnostics.lastFaultReason,
+      "Browser does not support isolated overlay hit testing",
+    );
+    assert.equal(diagnostics.lastOpenKind, "cold");
   });
 });

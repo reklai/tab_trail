@@ -1,6 +1,6 @@
-// Saved-trails UI session state. One controller instance is active while the
-// live trail panel is open; feature modules read/write through savedTrailsUi
-// instead of scattering module-level lets.
+// Saved-trails UI session state. Feature modules read/write through the
+// active controller bound by bindSavedTrailsHost. The isolated overlay frame
+// owns one document-lifetime controller so pending mutations survive hibernate.
 
 import type { SavedTrailsClient } from "../../../adapters/runtime/savedTrailsClient";
 import { normalizeSavedTrails, slicePathToIndex } from "../../../core/trail/trailCore";
@@ -65,7 +65,7 @@ export interface LibraryFocusIdentity {
   action: LibraryAction;
 }
 
-/** Owns all mutable saved-trails UI session state for one live overlay. */
+/** Owns mutable saved-trails UI session state for one overlay document. */
 export class SavedTrailsUiController {
   host: SavedTrailsHost | null = null;
   librarySession: LibrarySession | null = null;
@@ -97,7 +97,10 @@ export class SavedTrailsUiController {
     return this.nextDialogId;
   }
 
-  /** Library module registers its renderer so dialogs/mutations avoid circular imports. */
+  /**
+   * Library registers its renderer when the panel opens (not at import time),
+   * so dialogs/mutations can refresh without importing the library module.
+   */
   registerRenderLibrary(fn: (session: LibrarySession) => void): void {
     this.renderLibraryImpl = fn;
   }
@@ -133,8 +136,40 @@ export class SavedTrailsUiController {
   }
 }
 
-/** Active controller for the current breadcrumb overlay session. */
-export const savedTrailsUi = new SavedTrailsUiController();
+export function createSavedTrailsController(): SavedTrailsUiController {
+  return new SavedTrailsUiController();
+}
+
+/** Controller bound while a saved-trails host is active (and between hibernate remounts). */
+let activeController: SavedTrailsUiController | null = null;
+
+export function activateSavedTrailsController(controller: SavedTrailsUiController): void {
+  activeController = controller;
+}
+
+export function getSavedTrailsUi(): SavedTrailsUiController {
+  if (!activeController) {
+    activeController = createSavedTrailsController();
+  }
+  return activeController;
+}
+
+/**
+ * Compatibility surface for feature modules. Prefer getSavedTrailsUi() in new
+ * code; this alias keeps existing call sites readable while the owner is the
+ * document-lifetime controller activated by bindSavedTrailsHost.
+ */
+export const savedTrailsUi: SavedTrailsUiController = new Proxy({} as SavedTrailsUiController, {
+  get(_target, prop, receiver) {
+    const ui = getSavedTrailsUi();
+    const value = Reflect.get(ui, prop, ui);
+    return typeof value === "function" ? value.bind(ui) : value;
+  },
+  set(_target, prop, value) {
+    const ui = getSavedTrailsUi();
+    return Reflect.set(ui, prop, value, ui);
+  },
+});
 
 export function syncLiveInteraction(boundHost: SavedTrailsHost): void {
   boundHost.setLiveInteractionBlocked(isOverlaySurfaceBlockingLiveRender());

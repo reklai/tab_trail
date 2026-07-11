@@ -60,6 +60,32 @@ test("clip paths keep disjoint surfaces in separate closed subpaths", async () =
   assert.equal(geometry.buildOverlaySurfaceClipPath([]), geometry.OVERLAY_EMPTY_CLIP_PATH);
 });
 
+test("nextSurfacePublish unions previous and current then contracts when needed", async () => {
+  const geometry = await loadGeometry();
+  const previous = [{ x: 0, y: 0, width: 10, height: 10 }];
+  const current = [{ x: 20, y: 20, width: 10, height: 10 }];
+  const transition = geometry.nextSurfacePublish(previous, current);
+  assert.deepEqual(transition.publish, [
+    { x: 0, y: 0, width: 10, height: 10 },
+    { x: 20, y: 20, width: 10, height: 10 },
+  ]);
+  assert.equal(transition.needsContraction, true);
+
+  const same = geometry.nextSurfacePublish(current, current);
+  assert.deepEqual(same.publish, current);
+  assert.equal(same.needsContraction, false);
+
+  const deduped = geometry.uniqueSurfaceRects([
+    { x: 1, y: 1, width: 2, height: 2 },
+    { x: 1, y: 1, width: 2, height: 2 },
+  ]);
+  assert.deepEqual(deduped, [{ x: 1, y: 1, width: 2, height: 2 }]);
+  assert.equal(
+    geometry.surfaceRectsEqual(current, [{ x: 20, y: 20, width: 10, height: 10 }]),
+    true,
+  );
+});
+
 test("stale and malformed surface updates fail closed", async () => {
   const geometry = await loadGeometry();
   const viewport = { width: 100, height: 100 };

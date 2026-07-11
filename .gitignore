@@ -4,3 +4,5 @@ AGENTS.md
 .claude
 node_modules/
 dist/
+# Built store packages — produce via `npm run release:package` / CI, not commit.
+release/

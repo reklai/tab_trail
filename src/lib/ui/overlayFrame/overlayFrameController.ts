@@ -5,91 +5,45 @@
 
 import browser from "webextension-polyfill";
 import { browserSavedTrailsClient } from "../../adapters/runtime/savedTrailsClient";
-import {
-  jumpToTrailEntry,
-  openTabTrailOptions,
-  openTrailEntryInNewTab,
-  openTrailEntryInNewWindow,
-  reportTrailOverlayState,
-} from "../../adapters/runtime/tabtrailApi";
+import { reportTrailOverlayState } from "../../adapters/runtime/tabtrailApi";
 import {
   isOverlayFrameToHostMessage,
   OVERLAY_FRAME_PROTOCOL_VERSION,
   type OverlayFrameConnectMessage,
   type OverlayFrameToHostMessage,
   type OverlayHostToFrameMessage,
-  type OverlayRpcMethod,
-  type OverlayRpcRequest,
-  type OverlayRpcResponse,
-  type OverlayRpcResultMap,
 } from "../../common/contracts/overlayFrame";
 import { installMouseChordGuard } from "../../common/utils/mouseChordGuard";
 import { MOUSE_CHORD_SWALLOW_WINDOW_MS } from "../../core/trail/trailCore";
+import { createOverlayRpcExecutor } from "./overlayFrameRpc";
 import {
-  OVERLAY_EMPTY_CLIP_PATH,
-  validateSurfaceUpdate,
-} from "./surfaceGeometry";
+  actionFailure,
+  activeElementBelongsToFrame,
+  createColdSession,
+  FRAME_DOCUMENT_PATH,
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_MISS_LIMIT,
+  hideFrameSurface,
+  restorablePageElement,
+  setImportantStyle,
+  STARTUP_TIMEOUT_MS,
+  truncateDiagnosticReason,
+  VIEWPORT_TOLERANCE_PX,
+  type OverlayCloseRequest,
+  type OverlayFrameDiagnostics,
+  type OverlayFrameSession,
+  type OverlayOpenKind,
+} from "./overlayFrameSession";
+import { validateSurfaceUpdate } from "./surfaceGeometry";
 
-const FRAME_HOST_ID = "tabtrail-isolated-overlay-host";
-const FRAME_DOCUMENT_PATH = "overlayFrame/overlayFrame.html";
-const STARTUP_TIMEOUT_MS = 3000;
-const HEARTBEAT_INTERVAL_MS = 2000;
-const HEARTBEAT_MISS_LIMIT = 3;
-const VIEWPORT_TOLERANCE_PX = 1;
+export type {
+  OverlayCloseRequest,
+  OverlayFrameDiagnostics,
+} from "./overlayFrameSession";
 
 interface OverlayFrameControllerOptions {
   onPositionChange: (position: TabTrailOverlayPosition) => void | Promise<void>;
 }
-
-type OverlayOpenKind = "cold" | "warm";
-
-interface OverlayOpenAttempt {
-  hostStartedAt: number;
-  requestedAtEpochMs?: number;
-}
-
-interface OverlayFrameSession {
-  generation: number;
-  nonce: string;
-  host: HTMLDivElement;
-  shadow: ShadowRoot;
-  frame: HTMLIFrameElement;
-  state: TrailState;
-  settings: TabTrailSettings;
-  port: MessagePort | null;
-  ready: boolean;
-  claimed: boolean;
-  connected: boolean;
-  /** True while the trail UI is visible to the user (not warm-hibernated). */
-  visible: boolean;
-  focusOwned: boolean;
-  lastRequestId: number;
-  lastSequence: number | null;
-  lastPongAt: number;
-  missedHeartbeats: number;
-  heartbeatId: number;
-  startupTimer: number;
-  heartbeatTimer: number;
-  unsubscribeSavedTrails: (() => void) | null;
-  reportedOpen: boolean;
-  settled: boolean;
-  resolveOpened: (opened: boolean) => void;
-  opened: Promise<boolean>;
-  pendingOpenAttempt: OverlayOpenAttempt | null;
-  lastPageFocus: HTMLElement | null;
-  cleanupPageListeners: () => void;
-}
-
-function hideFrameSurface(frame: HTMLIFrameElement): void {
-  setImportantStyle(frame, "visibility", "hidden");
-  setImportantStyle(frame, "pointer-events", "none");
-  setImportantStyle(frame, "clip-path", OVERLAY_EMPTY_CLIP_PATH);
-}
-
-/** Explicit close intent: hibernate keeps the frame warm; destroy tears it down. */
-export type OverlayCloseRequest =
-  | { mode: "hibernate" }
-  | { mode: "destroy"; reason: string };
 
 export interface OverlayFrameController {
   isOpen(): boolean;
@@ -104,97 +58,7 @@ export interface OverlayFrameController {
   updateTrail(state: TrailState): void;
   updateSettings(settings: TabTrailSettings): void;
   authorizeClaim(nonce: string): TabTrailActionResult;
-}
-
-function randomNonce(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function setImportantStyle(element: HTMLElement, property: string, value: string): void {
-  element.style.setProperty(property, value, "important");
-}
-
-function createFrameHost(frameUrl: string): {
-  host: HTMLDivElement;
-  shadow: ShadowRoot;
-  frame: HTMLIFrameElement;
-} {
-  document.getElementById(FRAME_HOST_ID)?.remove();
-  const host = document.createElement("div");
-  host.id = FRAME_HOST_ID;
-  setImportantStyle(host, "all", "initial");
-  setImportantStyle(host, "position", "fixed");
-  setImportantStyle(host, "inset", "0");
-  setImportantStyle(host, "width", "100vw");
-  setImportantStyle(host, "height", "100vh");
-  setImportantStyle(host, "z-index", "2147483647");
-  setImportantStyle(host, "pointer-events", "none");
-  setImportantStyle(host, "overflow", "hidden");
-  setImportantStyle(host, "background", "transparent");
-  setImportantStyle(host, "border", "0");
-  setImportantStyle(host, "outline", "0");
-  setImportantStyle(host, "box-shadow", "none");
-  setImportantStyle(host, "margin", "0");
-  setImportantStyle(host, "padding", "0");
-  setImportantStyle(host, "color-scheme", "dark");
-
-  const shadow = host.attachShadow({ mode: "closed" });
-  const frame = document.createElement("iframe");
-  frame.title = "TabTrail navigation overlay";
-  frame.tabIndex = 0;
-  frame.setAttribute("aria-label", "TabTrail navigation overlay");
-  setImportantStyle(frame, "position", "fixed");
-  setImportantStyle(frame, "inset", "0");
-  setImportantStyle(frame, "width", "100vw");
-  setImportantStyle(frame, "height", "100vh");
-  setImportantStyle(frame, "border", "0");
-  setImportantStyle(frame, "outline", "0");
-  setImportantStyle(frame, "box-shadow", "none");
-  setImportantStyle(frame, "display", "block");
-  setImportantStyle(frame, "margin", "0");
-  setImportantStyle(frame, "padding", "0");
-  // Geometry updates briefly expose the union of old and new surface bounds,
-  // and merged bounds can contain intentional gaps. Those pixels must reveal
-  // the page; each rendered overlay surface supplies its own background.
-  setImportantStyle(frame, "background", "transparent");
-  setImportantStyle(frame, "pointer-events", "none");
-  setImportantStyle(frame, "visibility", "hidden");
-  setImportantStyle(frame, "clip-path", OVERLAY_EMPTY_CLIP_PATH);
-  setImportantStyle(frame, "overscroll-behavior", "none");
-  frame.src = frameUrl;
-  shadow.appendChild(frame);
-  (document.documentElement || document.body).appendChild(host);
-
-  const popoverHost = host as HTMLDivElement & {
-    popover?: string | null;
-    showPopover?: () => void;
-  };
-  if (typeof popoverHost.showPopover === "function") {
-    try {
-      popoverHost.popover = "manual";
-      popoverHost.showPopover();
-    } catch (_) {
-      popoverHost.removeAttribute("popover");
-    }
-  }
-  return { host, shadow, frame };
-}
-
-function activeElementBelongsToFrame(session: OverlayFrameSession): boolean {
-  return session.shadow.activeElement === session.frame || document.activeElement === session.host;
-}
-
-function restorablePageElement(element: HTMLElement | null): element is HTMLElement {
-  return element !== null &&
-    element.isConnected &&
-    !element.matches(":disabled") &&
-    element.closest("[inert]") === null;
-}
-
-function actionFailure(reason: string): { ok: false; reason: string } {
-  return { ok: false, reason };
+  getDiagnostics(): OverlayFrameDiagnostics;
 }
 
 export function createOverlayFrameController(
@@ -209,6 +73,15 @@ export function createOverlayFrameController(
   const mouseFollowUpGuard = installMouseChordGuard(window);
   let mouseFollowUpGuardTimer = 0;
   let disposed = false;
+  // Outlive host DOM so destroy diagnosis does not depend on attributes.
+  let lastFaultReason: string | null = null;
+  let surfaceResyncCount = 0;
+  let lastOpenKind: "cold" | "warm" | null = null;
+  let lastHostOpenLatencyMs: number | null = null;
+
+  const executeRpc = createOverlayRpcExecutor({
+    onPositionChange: options.onPositionChange,
+  });
 
   const armMouseFollowUpShield = (mouseButton: number): void => {
     if (disposed) return;
@@ -256,6 +129,7 @@ export function createOverlayFrameController(
     const settledAt = performance.now();
     const hostLatency = settledAt - attempt.hostStartedAt;
     if (Number.isFinite(hostLatency) && hostLatency >= 0) {
+      lastHostOpenLatencyMs = hostLatency;
       current.host.setAttribute(
         "data-tabtrail-host-open-latency-ms",
         hostLatency.toFixed(2),
@@ -313,6 +187,7 @@ export function createOverlayFrameController(
   const teardown = (current: OverlayFrameSession, reason: string): void => {
     if (session !== current) return;
     const restoreFocus = activeElementBelongsToFrame(current);
+    lastFaultReason = truncateDiagnosticReason(reason);
     session = null;
     current.visible = false;
     current.pendingOpenAttempt = null;
@@ -347,143 +222,6 @@ export function createOverlayFrameController(
     if (!session) return;
     if (request.mode === "destroy") teardown(session, request.reason);
     else hibernate(session);
-  };
-
-  const normalizeAction = async (
-    operation: () => Promise<TabTrailActionResult>,
-    fallback: string,
-  ): Promise<TabTrailActionResult> => {
-    try {
-      return await operation();
-    } catch (_) {
-      return actionFailure(fallback);
-    }
-  };
-
-  const rpcResponse = <M extends OverlayRpcMethod>(
-    request: OverlayRpcRequest<M>,
-    result: OverlayRpcResultMap[M],
-  ): OverlayRpcResponse =>
-    ({
-      requestId: request.requestId,
-      method: request.method,
-      result,
-    }) as OverlayRpcResponse;
-
-  const runRpc = async <M extends OverlayRpcMethod>(
-    request: OverlayRpcRequest<M>,
-    operation: () => Promise<OverlayRpcResultMap[M]>,
-    fallback: string,
-  ): Promise<OverlayRpcResponse> => {
-    try {
-      return rpcResponse(request, await operation());
-    } catch (_) {
-      return rpcResponse(request, actionFailure(fallback) as OverlayRpcResultMap[M]);
-    }
-  };
-
-  const executeRpc = async (request: OverlayRpcRequest): Promise<OverlayRpcResponse> => {
-    switch (request.method) {
-      case "LIVE_JUMP":
-        return runRpc(
-          request,
-          () => normalizeAction(
-            () => jumpToTrailEntry(request.params.index),
-            "Could not navigate to that trail entry",
-          ),
-          "Could not navigate to that trail entry",
-        );
-      case "LIVE_OPEN_NEW_TAB":
-        return runRpc(
-          request,
-          () => normalizeAction(
-            () => openTrailEntryInNewTab(request.params.index),
-            "Could not open that entry in a new tab",
-          ),
-          "Could not open that entry in a new tab",
-        );
-      case "LIVE_OPEN_NEW_WINDOW":
-        return runRpc(
-          request,
-          () => normalizeAction(
-            () => openTrailEntryInNewWindow(request.params.index),
-            "Could not open that entry in a new window",
-          ),
-          "Could not open that entry in a new window",
-        );
-      case "LIVE_OPEN_OPTIONS":
-        return runRpc(
-          request,
-          () => normalizeAction(openTabTrailOptions, "Settings unavailable"),
-          "Settings unavailable",
-        );
-      case "LIVE_CLOSE":
-        return rpcResponse(request, { ok: true });
-      case "LIVE_SET_POSITION":
-        return runRpc(
-          request,
-          async () => {
-            await options.onPositionChange(request.params.position);
-            return { ok: true };
-          },
-          "Could not save overlay position",
-        );
-      case "SAVED_LOAD":
-        return runRpc(
-          request,
-          async () => ({ ok: true, trails: await browserSavedTrailsClient.load() }),
-          "Could not load saved trails",
-        );
-      case "SAVED_OPEN":
-        return runRpc(
-          request,
-          () => normalizeAction(
-            () => browserSavedTrailsClient.open(request.params.path, request.params.mode),
-            "Could not open saved trail",
-          ),
-          "Could not open saved trail",
-        );
-      case "SAVED_SAVE":
-        return runRpc(
-          request,
-          () => browserSavedTrailsClient.save(request.params.path, request.params.name),
-          "Could not save trail",
-        );
-      case "SAVED_RENAME":
-        return runRpc(
-          request,
-          () => browserSavedTrailsClient.rename(request.params.id, request.params.name),
-          "Could not rename trail",
-        );
-      case "SAVED_REPLACE":
-        return runRpc(
-          request,
-          () => browserSavedTrailsClient.replace(
-            request.params.id,
-            request.params.path,
-            request.params.expectedPath,
-          ),
-          "Could not update trail",
-        );
-      case "SAVED_SET_PINNED":
-        return runRpc(
-          request,
-          () => browserSavedTrailsClient.setPinned(request.params.id, request.params.pinned),
-          "Could not change pinned state",
-        );
-      case "SAVED_DELETE":
-        return runRpc(
-          request,
-          () => browserSavedTrailsClient.delete(request.params.id),
-          "Could not remove trail",
-        );
-      case "SAVED_RESTORE":
-        return runRpc(
-          request,
-          () => browserSavedTrailsClient.restore(request.params.trail),
-          "Could not restore trail",
-        );
-    }
   };
 
   const installPageListeners = (current: OverlayFrameSession): (() => void) => {
@@ -543,6 +281,11 @@ export function createOverlayFrameController(
 
   const requestSurfaceResync = (current: OverlayFrameSession): void => {
     if (session !== current || !current.visible) return;
+    surfaceResyncCount += 1;
+    current.host.setAttribute(
+      "data-tabtrail-surface-resync-count",
+      String(surfaceResyncCount),
+    );
     hideFrameSurface(current.frame);
     postToFrame(current, {
       type: "HOST_REQUEST_SURFACES",
@@ -550,6 +293,12 @@ export function createOverlayFrameController(
     });
   };
 
+  // Bidirectional failure classes (host half). Geometry prefers soft resync;
+  // auth, capability, heartbeat, FRAME_ERROR, and unexpected ready hard-destroy.
+  // Soft (frame→host): malformed message drop; stale surface sequence; stale RPC id.
+  // Soft resync (frame→host): viewport mismatch; invalid non-stale surfaces.
+  // Hard (frame→host): unexpected FRAME_READY, heartbeat miss limit, FRAME_ERROR,
+  // unsupported clip-path, messageerror, startup timeout, unexpected reload.
   const receiveFrameMessage = (
     current: OverlayFrameSession,
     received: unknown,
@@ -557,7 +306,6 @@ export function createOverlayFrameController(
     if (session !== current) return;
     if (!isOverlayFrameToHostMessage(received)) {
       // Soft drop: a single malformed message must not kill a live overlay.
-      // Auth, startup, and heartbeat still own hard teardown.
       return;
     }
     const message: OverlayFrameToHostMessage = received;
@@ -568,12 +316,10 @@ export function createOverlayFrameController(
           return;
         }
         current.ready = true;
-        // HOST_INIT seeds protocol state only; HOST_SHOW always owns DOM mount.
-        // Cold open and warm-from-loading both paint via SHOW when visible.
+        // HOST_INIT seeds protocol/settings only; HOST_SHOW always owns DOM mount.
         postToFrame(current, {
           type: "HOST_INIT",
           version: OVERLAY_FRAME_PROTOCOL_VERSION,
-          state: current.state,
           settings: current.settings,
         });
         if (current.visible) {
@@ -586,8 +332,7 @@ export function createOverlayFrameController(
         }
         return;
       case "FRAME_RPC_REQUEST":
-        // Ignore stale/duplicate request ids rather than tearing down. A
-        // reconnecting or double-posted RPC must not destroy the session.
+        // Ignore stale/duplicate request ids rather than tearing down.
         if (message.request.requestId <= current.lastRequestId) {
           return;
         }
@@ -632,8 +377,6 @@ export function createOverlayFrameController(
           current.lastSequence,
         );
         if (!validated.ok) {
-          // Stale sequences and transient geometry glitches resync; only the
-          // permanent capability miss below hard-fails.
           if (validated.reason === "stale-sequence") return;
           requestSurfaceResync(current);
           return;
@@ -654,9 +397,7 @@ export function createOverlayFrameController(
         setImportantStyle(current.frame, "clip-path", validated.value.clipPath);
         setImportantStyle(current.frame, "visibility", "visible");
         setImportantStyle(current.frame, "pointer-events", "auto");
-        // Surfaces are live: settle the open Promise. Overlay-open was already
-        // reported when the session started so TRAIL_UPDATED is not dropped
-        // during the iframe handshake.
+        // Surfaces are live: settle the open Promise.
         if (!current.settled) {
           window.clearTimeout(current.startupTimer);
           settleOpenMetrics(current);
@@ -684,6 +425,8 @@ export function createOverlayFrameController(
   };
 
   const beginOpenPromise = (current: OverlayFrameSession): Promise<boolean> => {
+    window.clearTimeout(current.startupTimer);
+    current.startupTimer = 0;
     let resolveOpened = (_opened: boolean): void => {};
     const opened = new Promise<boolean>((resolve) => {
       resolveOpened = resolve;
@@ -715,10 +458,16 @@ export function createOverlayFrameController(
     current.focusOwned = false;
     current.lastSequence = null;
     current.lastPageFocus = active instanceof HTMLElement ? active : null;
+    // Diagnostics counter resets at the start of each visible attempt only.
+    surfaceResyncCount = 0;
+    lastOpenKind = kind;
+    current.host.setAttribute("data-tabtrail-surface-resync-count", "0");
     hideFrameSurface(current.frame);
     beginOpenMetrics(current, kind, hostStartedAt, requestedAtEpochMs);
     const opened = beginOpenPromise(current);
     reportOpenState(current, true);
+    // Always drop prior listeners before reinstall (re-arm footgun).
+    current.cleanupPageListeners();
     current.cleanupPageListeners = installPageListeners(current);
     return opened;
   };
@@ -774,37 +523,7 @@ export function createOverlayFrameController(
     }
     const hostStartedAt = performance.now();
     const frameUrl = browser.runtime.getURL(FRAME_DOCUMENT_PATH);
-    const { host, shadow, frame } = createFrameHost(frameUrl);
-    const current: OverlayFrameSession = {
-      generation: ++nextGeneration,
-      nonce: randomNonce(),
-      host,
-      shadow,
-      frame,
-      state,
-      settings,
-      port: null,
-      ready: false,
-      claimed: false,
-      connected: false,
-      visible: false,
-      focusOwned: false,
-      lastRequestId: 0,
-      lastSequence: null,
-      lastPongAt: performance.now(),
-      missedHeartbeats: 0,
-      heartbeatId: 0,
-      startupTimer: 0,
-      heartbeatTimer: 0,
-      unsubscribeSavedTrails: null,
-      reportedOpen: false,
-      settled: false,
-      resolveOpened: () => {},
-      opened: Promise.resolve(false),
-      pendingOpenAttempt: null,
-      lastPageFocus: null,
-      cleanupPageListeners: () => {},
-    };
+    const current = createColdSession(++nextGeneration, state, settings, frameUrl);
     session = current;
     const opened = armVisibleSession(
       current,
@@ -827,11 +546,11 @@ export function createOverlayFrameController(
       });
     });
 
-    frame.addEventListener("error", () => teardown(current, "Overlay frame failed to load"), {
+    current.frame.addEventListener("error", () => teardown(current, "Overlay frame failed to load"), {
       once: true,
     });
-    frame.addEventListener("load", () => {
-      if (session !== current || current.connected || !frame.contentWindow) {
+    current.frame.addEventListener("load", () => {
+      if (session !== current || current.connected || !current.frame.contentWindow) {
         if (session === current) teardown(current, "Overlay frame reloaded unexpectedly");
         return;
       }
@@ -851,7 +570,11 @@ export function createOverlayFrameController(
         nonce: current.nonce,
       };
       try {
-        frame.contentWindow.postMessage(connect, new URL(frame.src).origin, [channel.port2]);
+        current.frame.contentWindow.postMessage(
+          connect,
+          new URL(current.frame.src).origin,
+          [channel.port2],
+        );
       } catch (_) {
         teardown(current, "Overlay frame connection failed");
       }
@@ -914,5 +637,11 @@ export function createOverlayFrameController(
       session.claimed = true;
       return { ok: true };
     },
+    getDiagnostics: () => ({
+      lastFaultReason,
+      surfaceResyncCount,
+      lastOpenKind,
+      lastHostOpenLatencyMs,
+    }),
   };
 }

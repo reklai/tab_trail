@@ -191,8 +191,13 @@ test("host and frame message guards reject mismatched versions and malformed pay
   const version = protocol.OVERLAY_FRAME_PROTOCOL_VERSION;
 
   assert.equal(
-    protocol.isOverlayHostToFrameMessage({ type: "HOST_INIT", version, state, settings }),
+    protocol.isOverlayHostToFrameMessage({ type: "HOST_INIT", version, settings }),
     true,
+  );
+  assert.equal(
+    protocol.isOverlayHostToFrameMessage({ type: "HOST_INIT", version, state, settings }),
+    false,
+    "HOST_INIT no longer carries trail state",
   );
   assert.equal(
     protocol.isOverlayHostToFrameMessage({ type: "HOST_HIBERNATE", version }),
@@ -231,14 +236,13 @@ test("host and frame message guards reject mismatched versions and malformed pay
   );
 
   assert.equal(
-    protocol.isOverlayHostToFrameMessage({ type: "HOST_INIT", version: 1, state, settings }),
+    protocol.isOverlayHostToFrameMessage({ type: "HOST_INIT", version: 1, settings }),
     false,
   );
   assert.equal(
     protocol.isOverlayHostToFrameMessage({
       type: "HOST_INIT",
       version,
-      state,
       settings: { ...settings, maxVisibleSegments: 13 },
     }),
     false,
@@ -247,7 +251,6 @@ test("host and frame message guards reject mismatched versions and malformed pay
     protocol.isOverlayHostToFrameMessage({
       type: "HOST_INIT",
       version,
-      state,
       settings: { ...settings, trigger: { ...settings.trigger, keyCode: "F1" } },
     }),
     false,

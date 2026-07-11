@@ -33,6 +33,7 @@ async function loadOverlayFrameEntry() {
         stub(/core\/trail\/trailCore$/, "trail-core");
         stub(/ui\/panels\/breadcrumbTrail\/breadcrumbTrail$/, "breadcrumb-trail");
         stub(/ui\/panels\/breadcrumbTrail\/overlaySurfaces$/, "overlay-surfaces");
+        stub(/ui\/panels\/breadcrumbTrail\/savedTrailsSession$/, "saved-trails-session");
 
         buildApi.onLoad({
           filter: /^tabtrail-api$/,
@@ -122,6 +123,18 @@ async function loadOverlayFrameEntry() {
             }
             export function updateBreadcrumbTrail() {}
             export function updateBreadcrumbTrailSettings() {}
+          `,
+        }));
+        buildApi.onLoad({
+          filter: /^saved-trails-session$/,
+          namespace: "overlay-frame-trigger-stub",
+        }, () => ({
+          loader: "js",
+          contents: `
+            export class SavedTrailsUiController {}
+            export function createSavedTrailsController() {
+              return new SavedTrailsUiController();
+            }
           `,
         }));
         buildApi.onLoad({
@@ -217,13 +230,12 @@ test("the isolated frame closes on a mouse chord and swallows only its follow-up
   port.emitMessage({
     type: "HOST_INIT",
     version: PROTOCOL_VERSION,
-    state,
     settings,
   });
   assert.equal(
     port.posted.filter((message) => message.type === "FRAME_SURFACES_UPDATED").length,
     0,
-    "HOST_INIT seeds protocol state only and does not mount geometry",
+    "HOST_INIT seeds protocol settings only and does not mount geometry",
   );
   port.emitMessage({
     type: "HOST_SHOW",

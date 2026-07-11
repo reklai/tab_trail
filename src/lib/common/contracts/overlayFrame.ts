@@ -116,10 +116,9 @@ export type OverlayRpcResponse<M extends OverlayRpcMethod = OverlayRpcMethod> = 
 
 export type OverlayHostToFrameMessage =
   | {
-      // Seed frame protocol/settings only. DOM paint is always HOST_SHOW.
+      // Seed frame protocol/settings only. DOM paint + trail state is always HOST_SHOW.
       type: "HOST_INIT";
       version: typeof OVERLAY_FRAME_PROTOCOL_VERSION;
-      state: TrailState;
       settings: TabTrailSettings;
     }
   | {
@@ -507,8 +506,8 @@ export function isOverlayHostToFrameMessage(value: unknown): value is OverlayHos
   if (!isBaseProtocolMessage(value)) return false;
   switch (value.type) {
     case "HOST_INIT":
-      return hasOnlyKeys(value, ["type", "version", "state", "settings"]) &&
-        isTrailState(value.state) && isSettings(value.settings);
+      return hasOnlyKeys(value, ["type", "version", "settings"]) &&
+        isSettings(value.settings);
     case "HOST_TRAIL_UPDATED":
       return hasOnlyKeys(value, ["type", "version", "state"]) && isTrailState(value.state);
     case "HOST_SETTINGS_UPDATED":

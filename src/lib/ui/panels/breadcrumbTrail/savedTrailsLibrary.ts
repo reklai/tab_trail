@@ -46,6 +46,9 @@ import {
 } from "./savedTrailsSession";
 
 export function openLibraryPanel(): void {
+  // Register renderer when the panel opens — avoids import-time circular deps
+  // and side-effect load order between library, dialogs, and mutations.
+  savedTrailsUi.registerRenderLibrary(renderLibrary);
   if (!savedTrailsUi.host) return;
   const openingHost = savedTrailsUi.host;
   const opener = activeShadowElement(openingHost);
@@ -307,8 +310,6 @@ function renderLibrary(session: LibrarySession): void {
   }
   restoreRenderedFocus();
 }
-
-savedTrailsUi.registerRenderLibrary(renderLibrary);
 
 function buildLibraryState(message: string, role?: "status" | "alert"): HTMLDivElement {
   const state = document.createElement("div");

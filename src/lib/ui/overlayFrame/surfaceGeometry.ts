@@ -189,3 +189,50 @@ export function validateSurfaceUpdate(
     },
   };
 }
+
+/** Deduplicate rects by exact x/y/width/height identity. */
+export function uniqueSurfaceRects(
+  rects: readonly OverlaySurfaceRect[],
+): OverlaySurfaceRect[] {
+  const seen = new Set<string>();
+  const unique: OverlaySurfaceRect[] = [];
+  for (const rect of rects) {
+    const key = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(rect);
+  }
+  return unique;
+}
+
+export function surfaceRectsEqual(
+  first: readonly OverlaySurfaceRect[],
+  second: readonly OverlaySurfaceRect[],
+): boolean {
+  const firstKeys = new Set(first.map((rect) => (
+    `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+  )));
+  const secondKeys = new Set(second.map((rect) => (
+    `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+  )));
+  if (firstKeys.size !== secondKeys.size) return false;
+  for (const key of firstKeys) {
+    if (!secondKeys.has(key)) return false;
+  }
+  return true;
+}
+
+/**
+ * When layout changes, publish the union of previous + current for one frame so
+ * hit testing does not drop mid-transition, then contract to current if needed.
+ */
+export function nextSurfacePublish(
+  previous: readonly OverlaySurfaceRect[],
+  current: readonly OverlaySurfaceRect[],
+): { publish: OverlaySurfaceRect[]; needsContraction: boolean } {
+  const publish = uniqueSurfaceRects([...previous, ...current]);
+  return {
+    publish,
+    needsContraction: !surfaceRectsEqual(publish, current),
+  };
+}

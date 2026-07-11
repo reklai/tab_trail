@@ -161,7 +161,10 @@ function installDom() {
     Event: dom.window.Event,
     MouseEvent: dom.window.MouseEvent,
     KeyboardEvent: dom.window.KeyboardEvent,
+    // Preview preflight uses fetch; keep tests offline and immediately framable.
+    fetch: async () => new Response(null, { status: 200, headers: {} }),
   });
+  globalThis.fetch = globalThis.window.fetch;
   return dom;
 }
 
@@ -265,6 +268,7 @@ test("live trail makes the current crumb non-actionable and exposes an accessibl
     .find((item) => item.textContent === "Preview");
   assert.ok(previewAction);
   previewAction.click();
+  await flushMicrotasks();
 
   const preview = shadow.querySelector(".wf-preview-pane");
   assert.ok(preview);
@@ -369,6 +373,7 @@ test("metadata patches refresh retained live menus, actions, and previews", asyn
   [...menu.querySelectorAll(".wf-menu-item")]
     .find((item) => item.textContent === "Preview")
     .click();
+  await flushMicrotasks();
   const preview = shadow.querySelector(".wf-preview-pane");
   assert.equal(preview.querySelector(".wf-preview-pane-title").textContent, "Patched title");
   assert.equal(preview.querySelector("iframe").title, "Preview: Patched title");
@@ -381,6 +386,54 @@ test("metadata patches refresh retained live menus, actions, and previews", asyn
   assert.equal(shadow.querySelector(".wf-preview-pane"), preview, "the preview stays open");
   assert.equal(preview.querySelector(".wf-preview-pane-title").textContent, "Newest title");
   assert.equal(preview.querySelector("iframe").title, "Preview: Newest title");
+
+  globalThis.__breadcrumbCleanup();
+  cleanup();
+  dom.window.close();
+});
+
+test("cursor rebuild after metadata patch still jumps and opens the row menu", async () => {
+  const dom = installDom();
+  const { mod, cleanup } = await loadBreadcrumbModule();
+  const jumps = [];
+  const a = entry("https://a.test/", "A", 1000);
+  const b = entry("https://b.test/", "B", 2000);
+  mod.showBreadcrumbTrail(
+    { entries: [a, b], cursor: 1 },
+    options({ onJump(index) { jumps.push(index); } }),
+  );
+
+  const shadow = globalThis.__breadcrumbHost.shadowRoot;
+  const rowBefore = shadow.querySelector('.wf-branch-row[data-trail-index="0"]');
+  mod.updateBreadcrumbTrail({
+    entries: [{ ...a, title: "A patched" }, b],
+    cursor: 1,
+  });
+  assert.equal(
+    shadow.querySelector('.wf-branch-row[data-trail-index="0"]'),
+    rowBefore,
+    "title-only update patches in place",
+  );
+
+  mod.updateBreadcrumbTrail({
+    entries: [{ ...a, title: "A patched" }, b],
+    cursor: 0,
+  });
+  const currentMain = shadow.querySelector(
+    '.wf-branch-row[data-trail-index="0"] .wf-branch-row-main',
+  );
+  const forwardMain = shadow.querySelector(
+    '.wf-branch-row[data-trail-index="1"] .wf-branch-row-main',
+  );
+  assert.equal(currentMain.tagName, "DIV", "current row is non-jumping");
+  assert.equal(forwardMain.tagName, "BUTTON", "non-current row is a jump control");
+
+  forwardMain.click();
+  assert.deepEqual(jumps, [1]);
+
+  const more = shadow.querySelector('.wf-branch-row[data-trail-index="1"] .wf-row-more');
+  more.click();
+  assert.ok(shadow.querySelector(".wf-menu"), "⋯ still opens the row menu after rebuild");
 
   globalThis.__breadcrumbCleanup();
   cleanup();
