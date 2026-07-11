@@ -11,7 +11,7 @@ function readText(pathFromRoot) {
 
 test("CONTRIBUTING references the release, store, and privacy docs", () => {
   const contributing = readText("CONTRIBUTING.md");
-  for (const doc of ["RELEASE.md", "STORE.md", "PRIVACY.md"]) {
+  for (const doc of ["RELEASE.md", "STORE.md", "PRIVACY.md", "OVERLAY_UI.md", "STABILITY.md"]) {
     assert.ok(contributing.includes(doc), `CONTRIBUTING.md must reference ${doc}`);
   }
 });
@@ -27,6 +27,7 @@ test("README documents the trigger, tracking, and saved-trail persistence model"
   assert.doesNotMatch(readme, /\bduplicate\b/i);
   assert.match(readme, /toolbar\s+popup/i);
   assert.match(readme, /Works on Firefox, Chrome, and Zen Browser/);
+  assert.match(readme, /restores the last-known viewport|last-known scroll/i);
 });
 
 test("store and options copy describe saved-trail persistence and uniqueness", () => {
@@ -51,10 +52,20 @@ test("PRIVACY documents the stored keys and the no-collection stance", () => {
   assert.match(privacy, /tabtrailTrail:/);
   assert.match(privacy, /storageSchemaVersion/);
   assert.match(privacy, /does not collect, transmit, or share/);
+  assert.match(privacy, /viewport pixel offsets \(scroll position\)/);
+  assert.match(privacy, /never page content/i);
 });
 
 test("docs carry no leftover branding from earlier concepts", () => {
-  for (const doc of ["README.md", "STORE.md", "PRIVACY.md", "CONTRIBUTING.md", "RELEASE.md"]) {
+  for (const doc of [
+    "README.md",
+    "STORE.md",
+    "PRIVACY.md",
+    "CONTRIBUTING.md",
+    "RELEASE.md",
+    "OVERLAY_UI.md",
+    "STABILITY.md",
+  ]) {
     const text = readText(doc);
     assert.doesNotMatch(text, /TabWheel/, `${doc} should not mention TabWheel`);
     assert.doesNotMatch(text, /Scratchpad/i, `${doc} should not mention the scratchpad concept`);

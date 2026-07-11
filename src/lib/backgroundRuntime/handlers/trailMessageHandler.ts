@@ -11,6 +11,7 @@ import {
   saveCapturedTrail,
   setSavedTrailPinned,
 } from "../../adapters/storage/savedTrailsStore";
+import { normalizeViewport } from "../../core/trail/viewportCore";
 import { TrailDomain } from "../domains/trailDomain";
 import { RuntimeMessageHandler, UNHANDLED } from "./runtimeRouter";
 
@@ -120,6 +121,26 @@ export function createTrailMessageHandler(
 
       case "TRAIL_OPEN_IN_NEW_WINDOW":
         return await domain.openEntryInNewWindow(message.index, message.tabId, sender.tab);
+
+      case "TRAIL_SCROLL_REPORT": {
+        // Session-only patch; private tabs may report (memory only). Never
+        // routes to durable saved-trail storage. Top-frame only — trail tracks
+        // frameId === 0, and scroll samples must match that authority.
+        const tabId = sender.tab?.id;
+        if (tabId == null) return { ok: false, reason: "No tab" };
+        if (typeof sender.frameId !== "number" || sender.frameId !== 0) {
+          return { ok: false, reason: "Top frame only" };
+        }
+        if (typeof message.url !== "string" || message.url === "") {
+          return { ok: false, reason: "Invalid url" };
+        }
+        const viewport = normalizeViewport(message.viewport);
+        if (!viewport) return { ok: false, reason: "Invalid viewport" };
+        domain.applyScrollReport(tabId, message.url, viewport, {
+          flush: message.flush === true,
+        });
+        return { ok: true };
+      }
 
       case "SAVED_TRAIL_OPEN":
         return await domain.openSavedTrail(message.path, message.mode, sender.tab);

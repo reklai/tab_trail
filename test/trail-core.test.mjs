@@ -498,6 +498,150 @@ test("normalizeTrailState heals malformed persisted values", async () => {
   assert.deepEqual(inherited.entries.map((entry) => entry.historyBacked), [true, false]);
 });
 
+test("normalizeTrailState round-trips valid viewport and strips invalid", async () => {
+  const core = await loadTrailCoreModule();
+  const withViewport = core.normalizeTrailState({
+    entries: [
+      {
+        ...sampleEntry("https://a.test/"),
+        viewport: {
+          x: 12,
+          y: 840,
+          scrollHeight: 5000,
+          root: "document",
+          capturedAt: 99,
+        },
+      },
+      {
+        ...sampleEntry("https://b.test/"),
+        viewport: { x: "nope", y: 10 },
+      },
+      {
+        ...sampleEntry("https://c.test/"),
+        viewport: { x: -5, y: 1e9, root: "warp", rootSelector: "x".repeat(300) },
+      },
+    ],
+    cursor: 0,
+  });
+  assert.deepEqual(withViewport.entries[0].viewport, {
+    x: 12,
+    y: 840,
+    scrollHeight: 5000,
+    root: "document",
+    capturedAt: 99,
+  });
+  assert.equal(withViewport.entries[1].viewport, undefined);
+  assert.equal(withViewport.entries[2].viewport.x, 0);
+  assert.equal(withViewport.entries[2].viewport.y, 1e7);
+  assert.equal(withViewport.entries[2].viewport.root, undefined);
+  assert.equal(withViewport.entries[2].viewport.rootSelector, undefined);
+
+  // Round-trip through normalize again preserves the healed viewport.
+  const again = core.normalizeTrailState(withViewport);
+  assert.deepEqual(again.entries[0].viewport, withViewport.entries[0].viewport);
+});
+
+test("refreshEntry preserves viewport via object spread; makeEntry omits it", async () => {
+  const core = await loadTrailCoreModule();
+  let state = core.applyNavigationEvent(
+    core.EMPTY_TRAIL_STATE,
+    navEvent("https://a.test/"),
+  ).state;
+  assert.equal(state.entries[0].viewport, undefined);
+
+  // Patch viewport as the domain would after a scroll report.
+  state = {
+    entries: [{
+      ...state.entries[0],
+      viewport: { x: 0, y: 400, root: "document" },
+    }],
+    cursor: 0,
+  };
+
+  // Same-URL refresh (reload / replaceState churn) must keep viewport.
+  const refreshed = core.applyNavigationEvent(
+    state,
+    navEvent("https://a.test/", { transitionType: "reload" }),
+  ).state;
+  assert.deepEqual(refreshed.entries[0].viewport, { x: 0, y: 400, root: "document" });
+
+  // New navigation starts clean without viewport.
+  const next = core.applyNavigationEvent(
+    refreshed,
+    navEvent("https://b.test/"),
+  ).state;
+  assert.equal(next.entries[1].viewport, undefined);
+  assert.deepEqual(next.entries[0].viewport, { x: 0, y: 400, root: "document" });
+});
+
+test("savedTrailPathsEqual ignores viewport; savedTrailEntriesEqual includes it", async () => {
+  const core = await loadTrailCoreModule();
+  const path = [sampleEntry("https://a.test/", "A"), sampleEntry("https://b.test/", "B")];
+  const scrolled = path.map((entry, index) => ({
+    ...entry,
+    viewport: { x: 0, y: 100 * (index + 1), root: "document" },
+  }));
+  assert.equal(core.savedTrailPathsEqual(path, scrolled), true);
+  assert.equal(core.savedTrailEntriesEqual(path, scrolled), false);
+  assert.equal(core.savedTrailEntriesEqual(scrolled, scrolled), true);
+  assert.equal(
+    core.viewportEquals(
+      { x: 0, y: 10, capturedAt: 1 },
+      { x: 0, y: 10, capturedAt: 99 },
+    ),
+    true,
+  );
+});
+
+test("isAllowedRootSelector allowlists sampler grammar and rejects arbitrary CSS", async () => {
+  const core = await loadTrailCoreModule();
+  assert.equal(core.isAllowedRootSelector("#main"), true);
+  assert.equal(core.isAllowedRootSelector("#foo-bar"), true);
+  assert.equal(core.isAllowedRootSelector("div > section:nth-of-type(2)"), true);
+  assert.equal(core.isAllowedRootSelector("div:nth-of-type(1)"), true);
+  // Custom elements (hyphenated tags) are part of the sampler grammar.
+  assert.equal(core.isAllowedRootSelector("app-shell"), true);
+  assert.equal(core.isAllowedRootSelector("app-shell:nth-of-type(1) > main"), true);
+  assert.equal(core.isAllowedRootSelector("div.foo"), false);
+  assert.equal(core.isAllowedRootSelector("div[data-x]"), false);
+  assert.equal(core.isAllowedRootSelector(""), false);
+  // CSS.escape-style ids must not pass (sampler emits unescaped #id only).
+  assert.equal(core.isAllowedRootSelector("#foo\\:bar"), false);
+  // Element root with invalid selector is discarded entirely — never demote to
+  // document while keeping nested x/y (wrong coordinate space).
+  assert.equal(
+    core.normalizeViewport({
+      x: 0,
+      y: 10,
+      root: "element",
+      rootSelector: "div.evil > *",
+    }),
+    null,
+  );
+  assert.equal(
+    core.normalizeViewport({
+      x: 5,
+      y: 99,
+      root: "element",
+    }),
+    null,
+  );
+  // Valid nested selector is preserved.
+  assert.deepEqual(
+    core.normalizeViewport({
+      x: 0,
+      y: 40,
+      root: "element",
+      rootSelector: "app-shell:nth-of-type(1)",
+    }),
+    { x: 0, y: 40, root: "element", rootSelector: "app-shell:nth-of-type(1)" },
+  );
+  assert.equal(
+    core.normalizeViewport({ x: 0, y: 1, capturedAt: 1e20 })?.capturedAt,
+    undefined,
+  );
+});
+
 // --- named trail snapshots ---
 
 function sampleEntry(url, title = "") {

@@ -44,6 +44,32 @@ type TrailTransition =
   | "back_forward"
   | "other";
 
+/** Last-known viewport for a trail entry. Coordinates are CSS pixels. */
+interface TrailViewport {
+  /** Horizontal offset of the restored scroll root. */
+  x: number;
+  /** Vertical offset of the restored scroll root. */
+  y: number;
+  /**
+   * Scroll height of the root when sampled (for clamping after reflow).
+   * Optional; missing ⇒ clamp only against live max at restore time.
+   */
+  scrollHeight?: number;
+  /**
+   * Which root was sampled.
+   * - "document": document.scrollingElement / window
+   * - "element": a single primary nested scroller (selector best-effort)
+   */
+  root?: "document" | "element";
+  /** CSS selector for root === "element"; ignored for document. */
+  rootSelector?: string;
+  /** Epoch ms when sampled (debug / staleness). */
+  capturedAt?: number;
+}
+
+/** How the content script should apply a restore. Chosen by the domain. */
+type TrailScrollRestoreMode = "force" | "corrective";
+
 interface TrailEntry {
   url: string;
   title: string;
@@ -56,6 +82,8 @@ interface TrailEntry {
   // Whether the edge from the preceding entry exists in this tab's native
   // session history. False for lineage inherited when a new tab forks.
   historyBacked: boolean;
+  /** Optional last-known viewport; absent ⇒ no restore attempt. */
+  viewport?: TrailViewport;
 }
 
 // One tab's navigation trail. cursor points at the entry for the page the tab

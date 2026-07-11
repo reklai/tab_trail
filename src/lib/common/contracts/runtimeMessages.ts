@@ -6,7 +6,14 @@ export type ContentRuntimeMessage =
   | { type: "TRAIL_SHOW"; state: TrailState; requestedAtEpochMs?: number }
   | { type: "TRAIL_UPDATED"; state: TrailState }
   | { type: "OVERLAY_FRAME_CHALLENGE"; nonce: string }
-  | { type: "HISTORY_GO"; delta: number };
+  | { type: "HISTORY_GO"; delta: number }
+  | {
+      type: "TRAIL_RESTORE_SCROLL";
+      url: string;
+      viewport: TrailViewport;
+      mode: TrailScrollRestoreMode;
+      generation: number;
+    };
 
 // Messages content scripts and extension pages send TO the background.
 export type BackgroundRuntimeMessage =
@@ -15,6 +22,17 @@ export type BackgroundRuntimeMessage =
   | { type: "TRAIL_JUMP"; index: number; tabId?: number }
   | { type: "TRAIL_OPEN_IN_NEW_TAB"; index: number; tabId?: number }
   | { type: "TRAIL_OPEN_IN_NEW_WINDOW"; index: number; tabId?: number }
+  | {
+      type: "TRAIL_SCROLL_REPORT";
+      url: string;
+      viewport: TrailViewport;
+      /**
+       * Intentional contract extension beyond the design API table: when true,
+       * cancel viewport mirror coalesce and write the session trail immediately.
+       * Used for pagehide / unload flushes so the last sample survives worker sleep.
+       */
+      flush?: boolean;
+    }
   | { type: "TRAIL_OVERLAY_STATE"; open: boolean }
   | { type: "SAVED_TRAIL_SAVE"; path: TrailEntry[]; name: string }
   | { type: "SAVED_TRAIL_RENAME"; id: string; name: string }

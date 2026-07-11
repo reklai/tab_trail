@@ -32,6 +32,7 @@ test("message handler routes every trail message and falls back to UNHANDLED", (
     "TRAIL_JUMP",
     "TRAIL_OPEN_IN_NEW_TAB",
     "TRAIL_OPEN_IN_NEW_WINDOW",
+    "TRAIL_SCROLL_REPORT",
     "SAVED_TRAIL_SAVE",
     "SAVED_TRAIL_RENAME",
     "SAVED_TRAIL_REPLACE",
@@ -45,6 +46,7 @@ test("message handler routes every trail message and falls back to UNHANDLED", (
   ]) {
     assert.match(source, new RegExp(`case "${messageType}"`), `handler must route ${messageType}`);
   }
+  assert.match(source, /domain\.applyScrollReport\(/);
   assert.match(source, /domain\.openSavedTrail\(message\.path,/);
   assert.match(source, /saveCapturedTrail\(/);
   assert.match(source, /renameSavedTrail\(/);
@@ -59,6 +61,7 @@ test("message handler routes every trail message and falls back to UNHANDLED", (
 
 test("domain registers all three webNavigation intakes and serializes per tab", () => {
   const source = readSource("src/lib/backgroundRuntime/domains/trailDomain.ts");
+  const activation = readSource("src/lib/backgroundRuntime/domains/contentScriptActivation.ts");
   assert.match(source, /webNavigation\.onCommitted\.addListener/);
   assert.match(source, /webNavigation\.onHistoryStateUpdated\.addListener/);
   assert.match(source, /webNavigation\.onReferenceFragmentUpdated\.addListener/);
@@ -71,18 +74,27 @@ test("domain registers all three webNavigation intakes and serializes per tab", 
   assert.match(source, /tabs\.onRemoved\.addListener/);
   assert.match(source, /refreshExtension\(\)/);
   assert.match(source, /activateExistingContentScripts\(\)/);
-  assert.match(source, /"injected-all-frames"/);
-  assert.match(source, /"injected-top-frame"/);
-  assert.match(source, /function shouldRetryContentScriptInjection/);
-  assert.match(source, /outcome === "failed" \|\| outcome === "injected-top-frame"/);
+  assert.match(source, /contentScriptActivation/);
+  assert.match(activation, /"injected-all-frames"/);
+  assert.match(activation, /"injected-top-frame"/);
+  assert.match(activation, /function shouldRetryContentScriptInjection|shouldRetryContentScriptInjection/);
+  assert.match(activation, /outcome === "failed" \|\| outcome === "injected-top-frame"/);
+  assert.match(activation, /COMBINED_CONTENT_SCRIPT_FALLBACK|contentScript\.js/);
   assert.match(source, /openEntryInNewWindow/);
   assert.match(source, /openSavedTrail/);
   assert.match(source, /createInheritedTrailState\(path\)/);
-  assert.match(source, /seedInheritedTrail\(created\.id, state\)/);
-  assert.match(source, /seedInheritedTrail\(seededTabId, inherited\)/);
-  assert.match(source, /seedInheritedTrail\(targetTabId, inherited\)/);
+  assert.match(source, /scheduleSeedInheritedTrail\(created\.id, state\)/);
+  assert.match(source, /scheduleSeedInheritedTrail\(seededTabId, inherited\)/);
+  assert.match(source, /scheduleSeedInheritedTrail\(targetTabId, inherited\)/);
+  assert.match(source, /void seedInheritedTrail\(tabId, state\)\.catch\(\(\) => \{\}\)/);
   assert.match(source, /liveUrl !== endpointUrl/);
   assert.match(source, /pendingJumpByTabId\.set\(targetTabId, \{ index, kind: "navigate" \}\)/);
+  assert.match(source, /pendingRestoreByTabId/);
+  assert.match(source, /TRAIL_RESTORE_SCROLL/);
+  assert.match(source, /applyScrollReport/);
+  assert.match(source, /armPendingFromEntry\(created\.id/);
+  assert.match(source, /proactiveDispatch:\s*true/);
+  assert.match(source, /dispatchPendingRestore/);
   assert.match(
     source,
     /windows\.create\(\{\s*url:\s*endpoint\.url,\s*incognito:\s*sourceIncognito,\s*\}\)/,
@@ -115,6 +127,8 @@ test("content script captures both trigger event kinds in capture phase and is r
   assert.match(top, /overlayController\?\.open\([\s\S]*typed\.requestedAtEpochMs/);
   assert.match(top, /overlayController\?\.updateTrail\(typed\.state\)/);
   assert.match(top, /HISTORY_GO/);
+  assert.match(top, /TRAIL_RESTORE_SCROLL/);
+  assert.match(top, /installPageScrollBridge/);
   assert.match(top, /const destroyOpenOverlay\s*=\s*\(\):\s*void\s*=>/);
   assert.match(top, /mode:\s*"destroy"/);
   assert.match(top, /mode:\s*"hibernate"/);
@@ -170,14 +184,16 @@ test("split bootstrap retirement survives invalidated cleanup hooks", async () =
 test("isolated overlay host authenticates, clips, and owns focused input outside the page event path", () => {
   const top = readSource("src/lib/appInit/topFrameOverlay.ts");
   const host = readSource("src/lib/ui/overlayFrame/overlayFrameController.ts");
+  const hostSession = readSource("src/lib/ui/overlayFrame/overlayFrameSession.ts");
+  const hostRpc = readSource("src/lib/ui/overlayFrame/overlayFrameRpc.ts");
   const frame = readSource("src/entryPoints/overlayFrame/overlayFrame.ts");
   const frameCss = readSource("src/entryPoints/overlayFrame/overlayFrame.css");
-  assert.match(host, /attachShadow\(\{ mode: "closed" \}\)/);
+  assert.match(hostSession, /attachShadow\(\{ mode: "closed" \}\)/);
   assert.match(host, /new MessageChannel\(\)/);
   assert.match(host, /TABTRAIL_OVERLAY_CONNECT/);
   assert.match(host, /validateSurfaceUpdate/);
   assert.match(host, /clip-path/);
-  assert.match(host, /pointer-events", "none"/);
+  assert.match(hostSession, /pointer-events", "none"/);
   assert.match(host, /pointer-events", "auto"/);
   assert.match(host, /focusOwned/);
   // Open is reported as soon as the host session exists so TRAIL_UPDATED is not
@@ -193,30 +209,64 @@ test("isolated overlay host authenticates, clips, and owns focused input outside
   assert.match(host, /if \(!current\.settled\)[\s\S]*settleOpened\(current, true\)/);
   assert.doesNotMatch(host, /SAVED_SUBSCRIBE|SAVED_UNSUBSCRIBE/);
   // Soft protocol path: stale RPCs are ignored; geometry failures resync.
-  assert.match(host, /Ignore stale\/duplicate request ids/);
+  assert.match(host, /Ignore stale\/duplicate request ids|stale\/duplicate request ids/);
   assert.match(host, /requestSurfaceResync/);
-  assert.match(host, /HEARTBEAT_MISS_LIMIT/);
+  assert.match(hostSession, /HEARTBEAT_MISS_LIMIT/);
+  assert.match(hostRpc, /createOverlayRpcExecutor|LIVE_JUMP|SAVED_LOAD/);
   assert.doesNotMatch(host, /SAVED_DUPLICATE|browserSavedTrailsClient\.duplicate/);
+  assert.doesNotMatch(hostRpc, /SAVED_DUPLICATE|browserSavedTrailsClient\.duplicate/);
   assert.match(
     host,
     /const invalidateGeometry[\s\S]*hideFrameSurface[\s\S]*HOST_REQUEST_SURFACES/,
   );
+  // HOST_INIT seeds settings only — trail state rides on HOST_SHOW.
+  assert.match(
+    host,
+    /type: "HOST_INIT",\s*version: OVERLAY_FRAME_PROTOCOL_VERSION,\s*settings: current\.settings,/,
+  );
+  assert.doesNotMatch(
+    host,
+    /type: "HOST_INIT",\s*version: OVERLAY_FRAME_PROTOCOL_VERSION,\s*settings: current\.settings,\s*state:/,
+  );
+  // Re-arm must drop prior page listeners before reinstalling.
+  assert.match(host, /current\.cleanupPageListeners\(\);\s*current\.cleanupPageListeners = installPageListeners/);
   assert.match(frame, /claimOverlayFrame\(connection\.message\.nonce\)/);
   assert.match(frame, /FRAME_FOCUS_OWNERSHIP/);
-  assert.match(frame, /scheduleSurfaceGeometry/);
-  assert.match(frame, /installGeometryObservers/);
+  const frameGeometry = readSource("src/entryPoints/overlayFrame/overlayFrameGeometry.ts");
+  const frameClient = readSource("src/entryPoints/overlayFrame/overlayFrameHostClient.ts");
+  assert.match(frame, /createOverlayFrameGeometry|geometry\.schedule/);
+  assert.match(frameGeometry, /installObservers|scheduleSurfaceGeometry|function schedule/);
   assert.match(frame, /HOST_HIBERNATE|hibernateUi/);
   assert.match(frame, /seedHostState/);
   assert.match(frame, /HOST_SHOW|mountTrailUi/);
+  // HOST_INIT must not mount trail DOM; paint is HOST_SHOW-only.
+  assert.match(frame, /function seedHostState\(/);
   assert.match(
     frame,
-    /case "HOST_REQUEST_SURFACES":[\s\S]*sendMeasuredSurfaceGeometry\(true\)/,
+    /case "HOST_INIT":\s*try \{\s*seedHostState\(message\.settings\);/,
   );
-  assert.match(frame, /force \|\| sendContractionNextFrame/);
+  assert.match(
+    frame,
+    /case "HOST_SHOW":[\s\S]*mountTrailUi\(message\.state, message\.settings\)/,
+  );
+  assert.match(host, /getDiagnostics/);
+  assert.match(host, /surfaceResyncCount/);
+  assert.match(top, /mode:\s*"hibernate"/);
+  assert.match(top, /mode:\s*"destroy"/);
+  assert.doesNotMatch(top, /close\(\s*["']hibernate["']\s*\)|close\(\s*["']destroy["']/);
+  assert.match(
+    frame,
+    /case "HOST_REQUEST_SURFACES":[\s\S]*geometry\.sendImmediately\(true\)/,
+  );
+  assert.match(frameGeometry, /needsContraction|sendContractionNextFrame/);
+  assert.match(frameGeometry, /nextSurfacePublish/);
+  assert.match(frameClient, /createOverlayFrameHostClient|requestHost/);
   assert.match(frameCss, /overscroll-behavior:\s*none/);
-  assert.match(frame, /data-tabtrail-hit-surface/);
+  assert.match(frameGeometry, /data-tabtrail-hit-surface/);
   assert.doesNotMatch(frame, /SAVED_DUPLICATE|\bduplicate:\s*async/);
+  assert.doesNotMatch(frameClient, /SAVED_DUPLICATE|\bduplicate:\s*async/);
   assert.doesNotMatch(top, /showBreadcrumbTrail|hideBreadcrumbTrail/);
+  assert.match(frame, /createSavedTrailsController|savedTrailsController/);
 });
 
 test("trigger contract accepts left, middle, and right mouse buttons only", () => {
@@ -314,28 +364,30 @@ test("options page presents shortcut wording and reset controls", () => {
 
 test("live branch overlay hosts the bar and delegates saved trails", () => {
   const source = readSource("src/lib/ui/panels/breadcrumbTrail/breadcrumbTrail.ts");
+  const liveBar = readSource("src/lib/ui/panels/breadcrumbTrail/liveTrailBar.ts");
   const preview = readSource("src/lib/ui/panels/breadcrumbTrail/liveTrailPreview.ts");
   const notices = readSource("src/lib/ui/panels/breadcrumbTrail/liveTrailNotices.ts");
-  assert.match(source, /onOpenOptions\(\):\s*void/);
-  assert.match(source, /onOpenInNewWindow\(index:\s*number\):\s*void/);
-  assert.match(source, /branchList\.className\s*=\s*"wf-branch-list"/);
-  assert.match(source, /buildLibraryButton/);
-  assert.match(source, /toggleSavedTrailsLibrary/);
-  assert.match(source, /openSaveTrailDialog/);
+  assert.match(liveBar, /onOpenOptions\(\):\s*void/);
+  assert.match(liveBar, /onOpenInNewWindow\(index:\s*number\):\s*void/);
+  assert.match(liveBar, /branchList\.className\s*=\s*"wf-branch-list"/);
+  assert.match(liveBar, /buildLibraryButton|wf-library/);
+  assert.match(liveBar, /toggleSavedTrailsLibrary/);
+  assert.match(liveBar, /openSaveTrailDialog/);
   assert.match(source, /bindSavedTrailsHost/);
   assert.match(source, /installOverlayInteractionShield\(shadow\)/);
   assert.match(source, /removeInteractionShield\(\)/);
   assert.match(source, /closeTopOverlaySurface/);
   assert.match(source, /createLiveTrailPreview/);
-  assert.match(source, /canPatchLiveTrail/);
-  assert.match(source, /showContextMenu/);
+  assert.match(source, /createLiveTrailBar|canPatchLiveTrail/);
+  assert.match(liveBar, /canPatchLiveTrail/);
+  assert.match(liveBar, /showContextMenu/);
   assert.match(preview, /document\.createElement\("iframe"\)/);
   assert.match(preview, /startFreePixelDrag/);
   assert.match(preview, /allow-forms allow-popups allow-scripts/);
   assert.doesNotMatch(preview, /allow-same-origin/);
   assert.match(notices, /showLiveNotice/);
   assert.match(
-    source,
+    liveBar,
     /label:\s*"Preview"[\s\S]*label:\s*"Open in new tab"[\s\S]*label:\s*"Open in new window"[\s\S]*label:\s*"Copy URL"[\s\S]*label:\s*"Save trail up to this point in path"/,
   );
   assert.doesNotMatch(source, /function openLibraryPanel/);
@@ -426,10 +478,12 @@ test("runtime message contract declares all message literals", () => {
     "TRAIL_SHOW",
     "TRAIL_UPDATED",
     "HISTORY_GO",
+    "TRAIL_RESTORE_SCROLL",
     "TRAIL_TOGGLE_OVERLAY",
     "TRAIL_JUMP",
     "TRAIL_OPEN_IN_NEW_TAB",
     "TRAIL_OPEN_IN_NEW_WINDOW",
+    "TRAIL_SCROLL_REPORT",
     "SAVED_TRAIL_SAVE",
     "SAVED_TRAIL_RENAME",
     "SAVED_TRAIL_REPLACE",
@@ -443,6 +497,7 @@ test("runtime message contract declares all message literals", () => {
   ]) {
     assert.match(source, new RegExp(messageType), `contract must declare ${messageType}`);
   }
+  assert.match(source, /mode: TrailScrollRestoreMode/);
 });
 
 test("saved trail open sends a path so new tabs can inherit lineage", () => {

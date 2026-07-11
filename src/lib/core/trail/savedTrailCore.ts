@@ -3,6 +3,7 @@
 // normalization, creation, and navigation-path identity helpers.
 
 import { normalizeTrailState } from "./trailCore";
+import { viewportEquals } from "./viewportCore";
 
 // Hard cap for durable named snapshots in storage.local.
 export const MAX_SAVED_TRAILS = 50;
@@ -53,6 +54,8 @@ export function normalizeSavedTrailEntries(value: unknown): TrailEntry[] {
   }).entries;
 }
 
+// Full snapshot equality used by replaceSavedTrail early-return. Includes
+// viewport so a scroll-only replace is a real durable write.
 export function savedTrailEntriesEqual(
   left: readonly TrailEntry[],
   right: readonly TrailEntry[],
@@ -66,13 +69,15 @@ export function savedTrailEntriesEqual(
       entry.timestamp === other.timestamp &&
       entry.transition === other.transition &&
       entry.redirected === other.redirected &&
-      entry.historyBacked === other.historyBacked;
+      entry.historyBacked === other.historyBacked &&
+      viewportEquals(entry.viewport, other.viewport);
   });
 }
 
-// Navigation identity deliberately excludes presentation and observation
-// metadata. A saved path is the ordered sequence of exact locations and the
-// navigation/history edges that connect them.
+// Navigation identity deliberately excludes presentation, observation, and
+// viewport metadata. Path uniqueness must not flip when only scroll (or
+// cosmetics) change. Contrast with savedTrailEntriesEqual, which includes
+// viewport so scroll-only replace mutates storage.
 export function savedTrailPathsEqual(
   left: readonly TrailEntry[],
   right: readonly TrailEntry[],

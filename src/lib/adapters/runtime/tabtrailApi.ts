@@ -43,6 +43,37 @@ export async function reportTrailOverlayState(open: boolean): Promise<void> {
   await sendRuntimeMessage<TabTrailActionResult>({ type: "TRAIL_OVERLAY_STATE", open });
 }
 
+/** Report the current page viewport for the live trail session cache. */
+export async function reportTrailScroll(
+  url: string,
+  viewport: TrailViewport,
+  options?: { flush?: boolean },
+): Promise<void> {
+  await sendRuntimeMessage({
+    type: "TRAIL_SCROLL_REPORT",
+    url,
+    viewport,
+    ...(options?.flush ? { flush: true } : {}),
+  });
+}
+
+/**
+ * Unload/pagehide flush: retry so a cold MV3 worker still receives the last
+ * sample, and request an immediate mirror write. Safe because the report is
+ * idempotent (same cursor patch).
+ */
+export async function reportTrailScrollWithRetry(
+  url: string,
+  viewport: TrailViewport,
+): Promise<void> {
+  await sendRuntimeMessageWithRetry({
+    type: "TRAIL_SCROLL_REPORT",
+    url,
+    viewport,
+    flush: true,
+  });
+}
+
 export async function openTabTrailOptions(): Promise<TabTrailActionResult> {
   return sendRuntimeMessageWithRetry<TabTrailActionResult>({ type: "TABTRAIL_OPEN_OPTIONS" });
 }

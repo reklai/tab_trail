@@ -122,6 +122,14 @@ function removeBrowserHooks() {
   delete globalThis.__privateWindowCreate;
 }
 
+async function waitFor(predicate, label, attempts = 40) {
+  for (let i = 0; i < attempts; i += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
 test("open in new window preserves a private source profile without mirroring its lineage to disk", async (t) => {
   const { mod, cleanup } = await loadTrailDomain();
   t.after(cleanup);
@@ -135,6 +143,8 @@ test("open in new window preserves a private source profile without mirroring it
 
   assert.deepEqual(result, { ok: true });
   assert.deepEqual(calls.windowsCreate, [{ url: endpointUrl, incognito: true }]);
+  // Seed runs off the open critical path; wait for the lineage read of the new tab.
+  await waitFor(() => calls.tabsGet.includes(70), "seed tabs.get for private window tab");
   assert.deepEqual(calls.tabsGet, [7, 70]);
   assert.deepEqual(calls.storageSet, []);
 });
@@ -152,6 +162,8 @@ test("open in new window does not seed private lineage if the destination profil
 
   assert.deepEqual(result, { ok: true });
   assert.deepEqual(calls.windowsCreate, [{ url: endpointUrl, incognito: true }]);
+  // Allow a microtask tick so a mistaken seed would still register.
+  await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(calls.tabsGet, [7]);
   assert.deepEqual(calls.storageSet, []);
 });

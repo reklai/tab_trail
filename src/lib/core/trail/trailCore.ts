@@ -4,6 +4,8 @@
 // tests can exercise it without a browser. Named-trail library helpers live in
 // savedTrailCore.ts and are re-exported here for a stable import path.
 
+import { normalizeViewport } from "./viewportCore";
+
 // Hard cap per tab: the oldest entries fall off. Deep rabbit holes stay usable
 // while a runaway SPA can't grow the trail without bound.
 export const TRAIL_MAX_ENTRIES = 100;
@@ -343,6 +345,7 @@ export function normalizeTrailState(value: unknown): TrailState {
     // Follow the cursor onto the last surviving entry at or before its stored
     // position, so a skipped invalid entry or dropped prefix can't shift it.
     if (i <= cursorInWindow) cursor = entries.length;
+    const viewport = normalizeViewport(entry.viewport);
     entries.push({
       url: entry.url,
       title: typeof entry.title === "string" ? entry.title : "",
@@ -354,6 +357,7 @@ export function normalizeTrailState(value: unknown): TrailState {
       transition: normalizeTrailTransition(entry.transition),
       redirected: entry.redirected === true,
       historyBacked: entry.historyBacked !== false,
+      ...(viewport ? { viewport } : {}),
     });
   }
   if (entries.length === 0) return { entries: [], cursor: -1 };
@@ -404,3 +408,13 @@ export {
   savedTrailPathsEqual,
   suggestSavedTrailName,
 } from "./savedTrailCore";
+
+export {
+  clampViewportToLiveMax,
+  isAllowedRootSelector,
+  isFarFromTarget,
+  normalizeViewport,
+  shouldDeferClamp,
+  viewportDistance,
+  viewportEquals,
+} from "./viewportCore";

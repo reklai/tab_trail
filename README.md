@@ -15,8 +15,8 @@ dual build).
 
 - **Automatic tracking.** The background script listens to `webNavigation`
   events, including SPA `pushState` navigations and hash-route changes, and
-  records `{ url, title, favicon, timestamp }` per tab. Only top-level frames
-  are tracked, and only titles + URLs are stored.
+  records `{ url, title, favicon, timestamp }` plus last-known scroll offsets
+  per tab. Only top-level frames are tracked; page content is never stored.
 - **One shortcut, in-page.** The default shortcut is **Alt + H**, captured by a
   content script in the capture phase. The shortcut is configurable: modifier
   (Alt, Ctrl, or Super), optional Shift, and either a letter/top-row digit key
@@ -26,10 +26,16 @@ dual build).
   highlighted cursor marks where you are; jumping back moves the cursor and
   dims forward entries; navigating somewhere new from mid-trail drops the
   abandoned forward entries. Trail-row clicks use `history.go(delta)` where
-  possible, preserving scroll position and the back/forward cache.
+  possible, preserving scroll position and the back/forward cache. When the
+  jump must fall back to plain navigation — or when you open a **saved trail**
+  / seed a path into a new tab or window — In-Page Trail restores the last-known
+  viewport for that entry (both axes, multi-attempt for late layout). Seeded
+  paths mark only the first edge as history-backed, so in-path jumps almost
+  always use force restore rather than `history.go`.
 - **Session-only storage.** Trails live in `storage.session` and clear when the
   browser closes. Each tab keeps its most recent **100** pages. Closing a tab
-  deletes its trail immediately. Incognito trails stay in memory only.
+  deletes its trail immediately. Incognito trails stay in memory only. Scroll
+  on saved paths becomes durable only when you save or update a path.
 
 ## Using the overlay
 
@@ -72,7 +78,12 @@ dual build).
   content-script re-injection.
 - A page-initiated redirect or an inherited new-tab prefix does not map 1:1 to
   the new tab's native history. In-Page Trail detects those edges and falls back
-  to plain navigation for such jumps.
+  to plain navigation for such jumps, then restores last-known scroll when
+  available.
+- Scroll restore is best-effort: virtualized lists, unusual nested scrollers,
+  and major layout shifts after the restore window may still land off-target.
+  Nested primary scrollers are detected heuristically (one optional element
+  root); full nested-tree capture is out of scope.
 
 ## Development
 

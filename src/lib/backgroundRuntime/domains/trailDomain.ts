@@ -6,25 +6,35 @@
 // plain navigation as the fallback). Trails are session-only by design: on
 // browsers without storage.session the mirror lives in storage.local and is
 // wiped on browser startup, and incognito tabs are never mirrored at all.
+// Viewport scroll metadata rides TrailEntry; restore is dispatched via
+// TRAIL_RESTORE_SCROLL (force for navigate/open, corrective for historyGo).
 
 import browser, { Tabs } from "webextension-polyfill";
 import { TRAIL_MIRROR_KEY_PREFIX, trailMirrorKey } from "../../common/contracts/tabtrail";
+import type { ContentRuntimeMessage } from "../../common/contracts/runtimeMessages";
 import {
   applyNavigationEvent,
   createInheritedTrailState,
   EMPTY_TRAIL_STATE,
   normalizeTrailState,
+  normalizeViewport,
   resolveJumpPlan,
   slicePathToIndex,
+  viewportEquals,
 } from "../../core/trail/trailCore";
 import { createInFlightMemo, createKeyedTaskQueue, sleep } from "../../common/utils/asyncFlow";
-import { isKnownBrowserStoreRestrictedUrl } from "../../common/utils/restrictedUrls";
+import {
+  activateExistingContentScripts,
+  injectContentScriptIntoTab,
+  type ContentScriptInjectionOutcome,
+} from "./contentScriptActivation";
+
+const PENDING_RESTORE_TTL_MS = 3000;
+const DISPATCH_LADDER_MS = [50, 200, 500] as const;
+const VIEWPORT_MIRROR_COALESCE_MS = 750;
+const SCROLL_REPORT_MIN_INTERVAL_MS = 100;
 
 // --- Surfaces not fully covered by the polyfill types ---
-
-interface ScriptingApi {
-  executeScript(details: { target: { tabId: number; allFrames?: boolean }; files: string[] }): Promise<unknown>;
-}
 
 interface SessionStorageArea {
   get(keys: null | string | string[]): Promise<Record<string, unknown>>;
@@ -41,15 +51,13 @@ interface NavigationDetails {
   transitionQualifiers?: string[];
 }
 
-type ContentScriptInjectionOutcome =
-  | "injected-all-frames"
-  | "injected-top-frame"
-  | "skipped"
-  | "failed";
-
 type ContentScriptMessageDelivery =
   | { delivered: true; response: unknown }
   | { delivered: false };
+
+function didInjectContentScript(outcome: ContentScriptInjectionOutcome): boolean {
+  return outcome === "injected-all-frames" || outcome === "injected-top-frame";
+}
 
 export interface TrailDomain {
   ensureLoaded(): Promise<void>;
@@ -65,17 +73,30 @@ export interface TrailDomain {
     mode: SavedTrailOpenMode,
     senderTab?: Tabs.Tab,
   ): Promise<TabTrailActionResult>;
+  applyScrollReport(
+    tabId: number,
+    url: string,
+    viewport: TrailViewport,
+    options?: { flush?: boolean },
+  ): void;
   setOverlayOpen(senderTab: Tabs.Tab | undefined, open: boolean): TabTrailActionResult;
   refreshExtension(): Promise<TabTrailActionResult>;
   activateExistingContentScripts(): Promise<void>;
   registerLifecycleListeners(): void;
 }
 
-// On install/update we inject into already-open tabs (the manifest only
-// auto-injects on navigation). A tab that's momentarily inaccessible then —
-// mid-navigation, "cannot access contents", closing — fails; retry those over
-// this backoff so a transient miss doesn't leave the tab without the shortcut.
-const CONTENT_SCRIPT_RETRY_DELAYS_MS = [400, 1200];
+interface PendingRestore {
+  url: string;
+  viewport: TrailViewport;
+  mode: TrailScrollRestoreMode;
+  generation: number;
+  createdAt: number;
+  timeoutId?: ReturnType<typeof setTimeout>;
+}
+
+type TopFrameSendResult =
+  | { transported: false }
+  | { transported: true; accepted: boolean; reason?: string };
 
 function normalizePageUrl(url: string | undefined): string | null {
   if (!url) return null;
@@ -85,10 +106,6 @@ function normalizePageUrl(url: string | undefined): string | null {
   } catch (_) {
     return null;
   }
-}
-
-function isPageGestureRestrictedUrl(url: string | undefined): boolean {
-  return !normalizePageUrl(url) || isKnownBrowserStoreRestrictedUrl(url);
 }
 
 export function createTrailDomain(): TrailDomain {
@@ -101,6 +118,10 @@ export function createTrailDomain(): TrailDomain {
     number,
     { index: number; kind: TrailJumpPlan["kind"] }
   >();
+  const pendingRestoreByTabId = new Map<number, PendingRestore>();
+  const restoreGenerationByTabId = new Map<number, number>();
+  const viewportMirrorTimerByTabId = new Map<number, ReturnType<typeof setTimeout>>();
+  const lastScrollReportAtByTabId = new Map<number, number>();
 
   // Serializes reducer runs + mirror writes per tab so a fast SPA can't
   // interleave two navigation events for the same tab.
@@ -145,11 +166,54 @@ export function createTrailDomain(): TrailDomain {
     if (staleKeys.length > 0) await mirrorStore.remove(staleKeys).catch(() => {});
   }
 
+  // Navigation critical path: use memory or a single mirror key. Full rehydrate
+  // only blocks when this tab's trail is still missing after the fast read.
+  // After every await, re-check the map so a concurrent navigation/seed writer
+  // is never overwritten by a stale mirror snapshot (same fill-if-missing
+  // discipline as rehydrate).
+  async function ensureTabTrail(tabId: number): Promise<void> {
+    if (trailsByTabId.has(tabId)) {
+      void ensureLoaded();
+      return;
+    }
+    const key = trailMirrorKey(tabId);
+    const stored = await mirrorStore.get(key).catch(() => ({} as Record<string, unknown>));
+    if (trailsByTabId.has(tabId)) {
+      void ensureLoaded();
+      return;
+    }
+    const value = stored[key];
+    if (value !== undefined) {
+      const state = normalizeTrailState(value);
+      if (state.entries.length > 0) {
+        if (!trailsByTabId.has(tabId)) {
+          trailsByTabId.set(tabId, state);
+        }
+        void ensureLoaded();
+        return;
+      }
+    }
+    if (trailsByTabId.has(tabId)) {
+      void ensureLoaded();
+      return;
+    }
+    await ensureLoaded();
+  }
+
+  function resolveSourceTab(
+    targetTabId: number,
+    senderTab?: Tabs.Tab,
+  ): Promise<Tabs.Tab | null> {
+    if (senderTab?.id === targetTabId) return Promise.resolve(senderTab);
+    return browser.tabs.get(targetTabId).catch(() => null);
+  }
+
   // Mirror always re-reads the authoritative map at write time so a queued
   // snapshot cannot resurrect a trail after handleTabRemoved, and never races
   // a later reducer result. All map mutations go through tabQueue so title
   // patches and navigation events cannot interleave.
   function scheduleMirrorTrail(tabId: number): void {
+    clearViewportMirrorCoalesce(tabId);
     if (incognitoTabIds.has(tabId) && !mirrorIsSessionScoped) return;
     void tabQueue.run(tabId, async () => {
       if (incognitoTabIds.has(tabId) && !mirrorIsSessionScoped) return;
@@ -159,6 +223,187 @@ export function createTrailDomain(): TrailDomain {
         return;
       }
       await mirrorStore.set({ [trailMirrorKey(tabId)]: state }).catch(() => {});
+    });
+  }
+
+  function clearViewportMirrorCoalesce(tabId: number): void {
+    const timer = viewportMirrorTimerByTabId.get(tabId);
+    if (timer != null) {
+      clearTimeout(timer);
+      viewportMirrorTimerByTabId.delete(tabId);
+    }
+  }
+
+  // Viewport-only patches coalesce mirror writes (500–1000 ms quiet period)
+  // so continuous scroll does not thrash storage every debounce tick.
+  function scheduleMirrorTrailCoalesced(tabId: number): void {
+    if (incognitoTabIds.has(tabId) && !mirrorIsSessionScoped) return;
+    clearViewportMirrorCoalesce(tabId);
+    const timer = setTimeout(() => {
+      viewportMirrorTimerByTabId.delete(tabId);
+      scheduleMirrorTrail(tabId);
+    }, VIEWPORT_MIRROR_COALESCE_MS);
+    viewportMirrorTimerByTabId.set(tabId, timer);
+  }
+
+  function flushMirrorTrailImmediate(tabId: number): void {
+    clearViewportMirrorCoalesce(tabId);
+    scheduleMirrorTrail(tabId);
+  }
+
+  function nextRestoreGeneration(tabId: number): number {
+    const next = (restoreGenerationByTabId.get(tabId) ?? 0) + 1;
+    restoreGenerationByTabId.set(tabId, next);
+    return next;
+  }
+
+  function clearPendingRestore(tabId: number): void {
+    const prev = pendingRestoreByTabId.get(tabId);
+    if (prev?.timeoutId != null) clearTimeout(prev.timeoutId);
+    pendingRestoreByTabId.delete(tabId);
+  }
+
+  function setPendingRestore(
+    tabId: number,
+    spec: { url: string; viewport: TrailViewport; mode: TrailScrollRestoreMode },
+    options?: { proactiveDispatch?: boolean },
+  ): void {
+    const normalized = normalizeViewport(spec.viewport);
+    if (!normalized) return;
+    clearPendingRestore(tabId);
+    const generation = nextRestoreGeneration(tabId);
+    const createdAt = Date.now();
+    const timeoutId = setTimeout(() => {
+      const cur = pendingRestoreByTabId.get(tabId);
+      if (cur && cur.generation === generation) pendingRestoreByTabId.delete(tabId);
+    }, PENDING_RESTORE_TTL_MS);
+    pendingRestoreByTabId.set(tabId, {
+      url: spec.url,
+      viewport: normalized,
+      mode: spec.mode,
+      generation,
+      createdAt,
+      timeoutId,
+    });
+    if (options?.proactiveDispatch) {
+      void dispatchPendingRestore(tabId, spec.url);
+      for (const delay of DISPATCH_LADDER_MS) {
+        void sleep(delay).then(() => dispatchPendingRestore(tabId, spec.url));
+      }
+    }
+  }
+
+  function armPendingFromEntry(
+    tabId: number,
+    entry: TrailEntry | undefined,
+    mode: TrailScrollRestoreMode,
+    options?: { proactiveDispatch?: boolean },
+  ): void {
+    if (!entry?.viewport) return;
+    const viewport = normalizeViewport(entry.viewport);
+    if (!viewport) return;
+    setPendingRestore(
+      tabId,
+      { url: entry.url, viewport, mode },
+      options,
+    );
+  }
+
+  async function sendRestoreToTopFrame(
+    tabId: number,
+    message: ContentRuntimeMessage,
+  ): Promise<TopFrameSendResult> {
+    try {
+      const response = await browser.tabs.sendMessage(tabId, message, { frameId: 0 }) as unknown;
+      const ok =
+        typeof response === "object" &&
+        response !== null &&
+        (response as { ok?: unknown }).ok === true;
+      return {
+        transported: true,
+        accepted: ok,
+        reason: !ok && typeof (response as { reason?: unknown })?.reason === "string"
+          ? (response as { reason: string }).reason
+          : undefined,
+      };
+    } catch (_) {
+      return { transported: false };
+    }
+  }
+
+  async function dispatchPendingRestore(tabId: number, landedUrl: string): Promise<void> {
+    const pending = pendingRestoreByTabId.get(tabId);
+    if (!pending || pending.url !== landedUrl) return;
+    if (Date.now() - pending.createdAt > PENDING_RESTORE_TTL_MS) {
+      clearPendingRestore(tabId);
+      return;
+    }
+    // Snapshot generation before awaits so a superseding pending is not cleared
+    // when an older ladder tick's accept finally returns.
+    const acceptedGeneration = pending.generation;
+    const message: ContentRuntimeMessage = {
+      type: "TRAIL_RESTORE_SCROLL",
+      url: pending.url,
+      viewport: pending.viewport,
+      mode: pending.mode,
+      generation: acceptedGeneration,
+    };
+    let result = await sendRestoreToTopFrame(tabId, message);
+    if (!result.transported) {
+      const tab = await browser.tabs.get(tabId).catch(() => null);
+      if (tab && didInjectContentScript(await injectContentScriptIntoTab(tab))) {
+        await sleep(50);
+        result = await sendRestoreToTopFrame(tabId, message);
+      }
+    }
+    // Clear only on content acceptance of *this* generation — never on bare
+    // transport success, and never if a newer pending superseded us mid-flight.
+    if (result.transported && result.accepted) {
+      const cur = pendingRestoreByTabId.get(tabId);
+      if (cur && cur.generation === acceptedGeneration) {
+        clearPendingRestore(tabId);
+      }
+    }
+  }
+
+  function applyScrollReport(
+    tabId: number,
+    url: string,
+    viewport: TrailViewport,
+    options?: { flush?: boolean },
+  ): void {
+    const flush = options?.flush === true;
+    const now = Date.now();
+    if (!flush) {
+      const lastAt = lastScrollReportAtByTabId.get(tabId) ?? 0;
+      // Wall-clock throttle independent of mirror coalesce (skip on unload flush).
+      if (now - lastAt < SCROLL_REPORT_MIN_INTERVAL_MS) return;
+    }
+    lastScrollReportAtByTabId.set(tabId, now);
+
+    void tabQueue.run(tabId, async () => {
+      // Worker restart / cold map: rehydrate this tab's trail before patching.
+      await ensureTabTrail(tabId);
+      const state = trailsByTabId.get(tabId);
+      if (!state || state.cursor < 0) return;
+      const entry = state.entries[state.cursor];
+      // Strict URL match — mismatch drops are expected after nav races.
+      if (!entry || entry.url !== url) return;
+      const normalized = normalizeViewport(viewport);
+      if (!normalized) return;
+      if (viewportEquals(entry.viewport, normalized)) {
+        if (flush) flushMirrorTrailImmediate(tabId);
+        return;
+      }
+      const entries = state.entries.slice();
+      entries[state.cursor] = { ...entry, viewport: normalized };
+      trailsByTabId.set(tabId, { entries, cursor: state.cursor });
+      if (flush) {
+        flushMirrorTrailImmediate(tabId);
+      } else {
+        scheduleMirrorTrailCoalesced(tabId);
+      }
+      // Do NOT notify overlay — viewport is not UI chrome state.
     });
   }
 
@@ -266,104 +511,38 @@ export function createTrailDomain(): TrailDomain {
         pendingJumpIndex: pendingJump?.index ?? null,
         pendingJumpKind: pendingJump?.kind ?? null,
       };
+      const landedUrl = details.url;
       const { state, changed } = applyNavigationEvent(getTrailState(tabId), event);
-      if (!changed) return;
-      trailsByTabId.set(tabId, state);
-      scheduleMirrorTrail(tabId);
-      notifyOverlayIfOpen(tabId);
+      if (changed) {
+        trailsByTabId.set(tabId, state);
+        scheduleMirrorTrail(tabId);
+        notifyOverlayIfOpen(tabId);
+      }
+      // Restore dispatch is NOT gated on changed — duplicate commits / same-URL
+      // races must still deliver pending restore when URL matches.
+      void dispatchPendingRestore(tabId, landedUrl);
+
+      // Browser chrome back/forward without an extension jump: synthesize
+      // corrective pending when the landed entry already has a viewport.
+      if (!pendingJump && Array.isArray(event.qualifiers) && event.qualifiers.includes("forward_back")) {
+        const live = trailsByTabId.get(tabId) ?? state;
+        const entry = live.cursor >= 0 ? live.entries[live.cursor] : undefined;
+        if (
+          entry?.viewport &&
+          entry.url === landedUrl &&
+          !pendingRestoreByTabId.has(tabId)
+        ) {
+          setPendingRestore(tabId, {
+            url: entry.url,
+            viewport: entry.viewport,
+            mode: "corrective",
+          });
+          void dispatchPendingRestore(tabId, landedUrl);
+        }
+      }
     }).then(() => {
       void patchCursorEntryFromLiveTab(tabId);
     });
-  }
-
-  // --- Content script injection (mirrors the reference extension) ---
-
-  async function executeScriptFiles(
-    tabId: number,
-    files: string[],
-    allFrames: boolean,
-  ): Promise<boolean> {
-    const runtimeBrowser = browser as typeof browser & {
-      scripting?: ScriptingApi;
-      tabs: typeof browser.tabs & {
-        executeScript?: (tabId: number, details: { file: string; runAt?: string; allFrames?: boolean }) => Promise<unknown>;
-      };
-    };
-    try {
-      if (runtimeBrowser.scripting?.executeScript) {
-        await runtimeBrowser.scripting.executeScript({
-          target: { tabId, ...(allFrames ? { allFrames: true } : {}) },
-          files,
-        });
-        return true;
-      }
-      if (runtimeBrowser.tabs.executeScript) {
-        // MV2 executeScript takes one file per call.
-        for (const file of files) {
-          await runtimeBrowser.tabs.executeScript(tabId, {
-            file,
-            runAt: "document_start",
-            ...(allFrames ? { allFrames: true } : {}),
-          });
-        }
-        return true;
-      }
-    } catch (_) {
-      return false;
-    }
-    return false;
-  }
-
-  async function injectContentScriptIntoTab(tab: Tabs.Tab): Promise<ContentScriptInjectionOutcome> {
-    if (tab.id == null || tab.discarded === true || isPageGestureRestrictedUrl(tab.url)) return "skipped";
-    // Chord capture in every frame; overlay host only needs the top frame.
-    // The two split injects are independent — run them in parallel.
-    const [chordOk, topOk] = await Promise.all([
-      executeScriptFiles(tab.id, ["contentScriptChord.js"], true),
-      executeScriptFiles(tab.id, ["contentScriptTop.js"], false),
-    ]);
-    if (chordOk && topOk) return "injected-all-frames";
-    if (topOk) return "injected-top-frame";
-    // Last resort: combined bundle into the top frame only.
-    return await executeScriptFiles(tab.id, ["contentScript.js"], false)
-      ? "injected-top-frame"
-      : "failed";
-  }
-
-  function shouldRetryContentScriptInjection(outcome: ContentScriptInjectionOutcome): boolean {
-    return outcome === "failed" || outcome === "injected-top-frame";
-  }
-
-  function didInjectContentScript(outcome: ContentScriptInjectionOutcome): boolean {
-    return outcome === "injected-all-frames" || outcome === "injected-top-frame";
-  }
-
-  async function activateExistingContentScripts(): Promise<void> {
-    const tabs = await browser.tabs.query({}).catch(() => [] as Tabs.Tab[]);
-    const outcomes = await Promise.all(
-      tabs.map(async (tab) => ({ tab, outcome: await injectContentScriptIntoTab(tab) })),
-    );
-    // "injected-top-frame" is usable as a fallback, but subframes may still
-    // need a retry so the shortcut works when focus is inside them.
-    let pending = outcomes
-      .filter((entry) => shouldRetryContentScriptInjection(entry.outcome))
-      .map((entry) => entry.tab);
-
-    for (const delay of CONTENT_SCRIPT_RETRY_DELAYS_MS) {
-      if (pending.length === 0) break;
-      await sleep(delay);
-      const retried = await Promise.all(
-        pending.map(async (tab) => {
-          // Re-fetch first: the tab may have navigated (the manifest already
-          // injected it — a re-inject is a no-op via __tabtrailCleanup) or closed.
-          const fresh = tab.id != null ? await browser.tabs.get(tab.id).catch(() => null) : null;
-          if (!fresh) return "skipped" as const;
-          return injectContentScriptIntoTab(fresh);
-        }),
-      );
-      pending = pending.filter((_, index) =>
-        shouldRetryContentScriptInjection(retried[index]));
-    }
   }
 
   // --- Domain methods ---
@@ -378,6 +557,7 @@ export function createTrailDomain(): TrailDomain {
   }
 
   async function seedInheritedTrail(tabId: number, state: TrailState): Promise<void> {
+    let redispatchUrl: string | null = null;
     await tabQueue.run(tabId, async () => {
       await ensureLoaded();
       const tab = await browser.tabs.get(tabId).catch(() => null);
@@ -403,7 +583,25 @@ export function createTrailDomain(): TrailDomain {
       // the first durable snapshot includes live metadata when available.
       applyCursorEntryPatch(tabId, tab);
       scheduleMirrorTrail(tabId);
+
+      // Post-seed re-dispatch: land-before-pending / inject races can leave
+      // pending present after create; retry once when live URL matches.
+      const pending = pendingRestoreByTabId.get(tabId);
+      if (pending && (tab.url === pending.url || liveUrl === normalizePageUrl(pending.url))) {
+        redispatchUrl = pending.url;
+      }
     });
+    if (redispatchUrl != null) {
+      void dispatchPendingRestore(tabId, redispatchUrl);
+    }
+  }
+
+  // Open/window responses stay on the critical path; lineage is eventual.
+  // Callers return { ok: true } before seed finishes, so a brief empty trail
+  // on the destination tab is expected. Quiet rejections so fire-and-forget
+  // cannot surface as unhandled promise rejections.
+  function scheduleSeedInheritedTrail(tabId: number, state: TrailState): void {
+    void seedInheritedTrail(tabId, state).catch(() => {});
   }
 
   async function createTabFromInheritedTrail(
@@ -420,8 +618,11 @@ export function createTrailDomain(): TrailDomain {
         ...(sourceTab?.windowId != null ? { windowId: sourceTab.windowId } : {}),
         ...(sourceTab?.index != null ? { index: sourceTab.index + 1 } : {}),
       });
+      // Seed after the tab exists; do not block the open response on bookkeeping.
+      // CRITICAL: arm pending on created.id — never on the source tab.
       if (created.id != null) {
-        await seedInheritedTrail(created.id, state);
+        armPendingFromEntry(created.id, endpoint, "force", { proactiveDispatch: true });
+        scheduleSeedInheritedTrail(created.id, state);
       }
       return { ok: true };
     } catch (_) {
@@ -464,61 +665,69 @@ export function createTrailDomain(): TrailDomain {
   }
 
   async function jumpTo(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
-    await ensureLoaded();
     const targetTabId = await resolveTargetTabId(tabId, senderTab);
     if (targetTabId == null) return { ok: false, reason: "No tab to navigate" };
+    await ensureTabTrail(targetTabId);
     const state = getTrailState(targetTabId);
     const plan = resolveJumpPlan(state, index);
     if (!plan) return { ok: true };
 
+    const targetEntry = state.entries[index];
     pendingJumpByTabId.set(targetTabId, { index, kind: plan.kind });
     if (plan.kind === "historyGo") {
+      armPendingFromEntry(targetTabId, targetEntry, "corrective");
       try {
         await browser.tabs.sendMessage(targetTabId, { type: "HISTORY_GO", delta: plan.delta }, { frameId: 0 });
         return { ok: true };
       } catch (_) {
         // No content script in that tab (privileged page); fall through to a
-        // plain navigation on the same trail target.
+        // plain navigation on the same trail target. Flip restore mode to force.
         pendingJumpByTabId.set(targetTabId, { index, kind: "navigate" });
+        armPendingFromEntry(targetTabId, targetEntry, "force");
       }
+    } else {
+      armPendingFromEntry(targetTabId, targetEntry, "force");
     }
-    const url = state.entries[index]?.url;
+    const url = targetEntry?.url;
     if (!url) {
       pendingJumpByTabId.delete(targetTabId);
+      clearPendingRestore(targetTabId);
       return { ok: false, reason: "Trail entry missing" };
     }
     try {
       await browser.tabs.update(targetTabId, { url });
+      // Match openSavedTrail current: one proactive dispatch covers inject races
+      // before the next nav event lands.
+      void dispatchPendingRestore(targetTabId, url);
       return { ok: true };
     } catch (_) {
       pendingJumpByTabId.delete(targetTabId);
+      clearPendingRestore(targetTabId);
       return { ok: false, reason: "Navigation failed" };
     }
   }
 
   async function openEntryInNewTab(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
-    await ensureLoaded();
     const targetTabId = await resolveTargetTabId(tabId, senderTab);
     if (targetTabId == null) return { ok: false, reason: "No source tab" };
+    await ensureTabTrail(targetTabId);
     const path = slicePathToIndex(getTrailState(targetTabId), index);
     if (!path) return { ok: false, reason: "Trail entry missing" };
     const inherited = createInheritedTrailState(path);
-    const sourceTab = await browser.tabs.get(targetTabId).catch(() => null);
+    const sourceTab = await resolveSourceTab(targetTabId, senderTab);
     return createTabFromInheritedTrail(inherited, sourceTab, false);
   }
 
   async function openEntryInNewWindow(index: number, tabId?: number, senderTab?: Tabs.Tab): Promise<TabTrailActionResult> {
-    await ensureLoaded();
     const targetTabId = await resolveTargetTabId(tabId, senderTab);
     if (targetTabId == null) return { ok: false, reason: "No source tab" };
+    await ensureTabTrail(targetTabId);
     const path = slicePathToIndex(getTrailState(targetTabId), index);
     if (!path) return { ok: false, reason: "Trail entry missing" };
     const inherited = createInheritedTrailState(path);
     const endpoint = inherited.entries[inherited.cursor];
     if (!endpoint) return { ok: false, reason: "Trail endpoint missing" };
-    const sourceTab = senderTab?.id === targetTabId
-      ? senderTab
-      : await browser.tabs.get(targetTabId).catch(() => null);
+    const sourceTab = await resolveSourceTab(targetTabId, senderTab);
     if (!sourceTab) return { ok: false, reason: "No source tab" };
     const sourceIncognito = sourceTab.incognito === true;
     try {
@@ -529,8 +738,10 @@ export function createTrailDomain(): TrailDomain {
       const seededTabId = created.tabs?.find((tab) => tab.id != null)?.id;
       // Never copy lineage between regular and private profiles, even if a
       // browser ignores or cannot honor the requested window profile.
+      // Seed off the critical path so the window appears immediately.
       if (seededTabId != null && created.incognito === sourceIncognito) {
-        await seedInheritedTrail(seededTabId, inherited);
+        armPendingFromEntry(seededTabId, endpoint, "force", { proactiveDispatch: true });
+        scheduleSeedInheritedTrail(seededTabId, inherited);
       }
       return { ok: true };
     } catch (_) {
@@ -540,13 +751,14 @@ export function createTrailDomain(): TrailDomain {
 
   // Open a saved path at its endpoint with the full path as inherited lineage.
   // New-tab mode creates a tab; current-tab mode navigates the active tab and
-  // seeds the same non-historyBacked prefix so jumps still work.
+  // seeds the same non-historyBacked prefix so jumps still work. The path is
+  // already on the wire, so open does not wait on full trail rehydrate.
+  // Seed is eventual-consistent with the open response (see scheduleSeedInheritedTrail).
   async function openSavedTrail(
     path: TrailEntry[],
     mode: SavedTrailOpenMode,
     senderTab?: Tabs.Tab,
   ): Promise<TabTrailActionResult> {
-    await ensureLoaded();
     const inherited = createInheritedTrailState(path);
     const endpoint = inherited.entries[inherited.cursor];
     if (!endpoint) return { ok: false, reason: "Trail endpoint missing" };
@@ -554,10 +766,15 @@ export function createTrailDomain(): TrailDomain {
     if (mode === "current") {
       if (targetTabId == null) return { ok: false, reason: "No tab to navigate" };
       try {
+        // Arm force pending on the navigated tab BEFORE tabs.update so land
+        // can restore even if seed loses the race with a cold makeEntry.
+        armPendingFromEntry(targetTabId, endpoint, "force");
         await browser.tabs.update(targetTabId, { url: endpoint.url });
-        await seedInheritedTrail(targetTabId, inherited);
+        void dispatchPendingRestore(targetTabId, endpoint.url);
+        scheduleSeedInheritedTrail(targetTabId, inherited);
         return { ok: true };
       } catch (_) {
+        clearPendingRestore(targetTabId);
         return { ok: false, reason: "Navigation failed" };
       }
     }
@@ -588,9 +805,14 @@ export function createTrailDomain(): TrailDomain {
 
   async function handleStartup(): Promise<void> {
     // Fresh browser session: tab ids restarted, trails are session-only.
+    for (const tabId of pendingRestoreByTabId.keys()) clearPendingRestore(tabId);
+    for (const tabId of viewportMirrorTimerByTabId.keys()) clearViewportMirrorCoalesce(tabId);
     trailsByTabId.clear();
     overlayOpenTabIds.clear();
     pendingJumpByTabId.clear();
+    pendingRestoreByTabId.clear();
+    restoreGenerationByTabId.clear();
+    lastScrollReportAtByTabId.clear();
     incognitoTabIds.clear();
     if (mirrorIsSessionScoped) return;
     // The local-storage fallback survives a restart; wipe it so the trail
@@ -604,6 +826,10 @@ export function createTrailDomain(): TrailDomain {
     trailsByTabId.delete(tabId);
     overlayOpenTabIds.delete(tabId);
     pendingJumpByTabId.delete(tabId);
+    clearPendingRestore(tabId);
+    clearViewportMirrorCoalesce(tabId);
+    restoreGenerationByTabId.delete(tabId);
+    lastScrollReportAtByTabId.delete(tabId);
     const wasIncognito = incognitoTabIds.delete(tabId);
     if (!(wasIncognito && !mirrorIsSessionScoped)) {
       void mirrorStore.remove(trailMirrorKey(tabId)).catch(() => {});
@@ -648,6 +874,7 @@ export function createTrailDomain(): TrailDomain {
     openEntryInNewTab,
     openEntryInNewWindow,
     openSavedTrail,
+    applyScrollReport,
     setOverlayOpen,
     refreshExtension,
     activateExistingContentScripts,

@@ -330,6 +330,34 @@ test("replace no-op and pin changes preserve updatedAt", async () => {
   assert.equal(pinned.trail.updatedAt, saved.trail.updatedAt);
 });
 
+test("scroll-only replace mutates storage (entries equal includes viewport)", async () => {
+  const { mod } = await loadStoreModule();
+  resetStorage();
+  const saved = await mod.saveTrailFromPath(
+    sampleState(["https://a.test/", "https://b.test/"]),
+    1,
+    "Scroll Path",
+  );
+  assert.equal(saved.ok, true);
+  const scrolled = saved.trail.entries.map((entry, index) => ({
+    ...entry,
+    viewport: { x: 0, y: 200 * (index + 1), scrollHeight: 4000, root: "document" },
+  }));
+  const replaced = await mod.replaceSavedTrail(saved.trail.id, scrolled);
+  assert.equal(replaced.ok, true);
+  assert.ok(replaced.trail.updatedAt > saved.trail.updatedAt);
+  assert.deepEqual(replaced.trail.entries[1].viewport, {
+    x: 0,
+    y: 400,
+    scrollHeight: 4000,
+    root: "document",
+  });
+  // Same path without viewport still unique by path identity — no second save.
+  const conflict = await mod.saveCapturedTrail(saved.trail.entries, "Other name");
+  assert.equal(conflict.ok, false);
+  assert.match(conflict.reason, /already saved/i);
+});
+
 test("delete snapshot restores exactly and restore conflicts fail visibly", async () => {
   const { mod } = await loadStoreModule();
   resetStorage();

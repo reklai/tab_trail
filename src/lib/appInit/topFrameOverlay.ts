@@ -1,5 +1,6 @@
-// Top-frame-only overlay host: MessagePort iframe, trail updates, history.go.
-// Chord capture is owned by chordCapture.ts (all frames).
+// Top-frame-only overlay host: MessagePort iframe, trail updates, history.go,
+// and page scroll capture/restore. Chord capture is owned by chordCapture.ts
+// (all frames) — no scroll logic there.
 
 import browser from "webextension-polyfill";
 import {
@@ -17,6 +18,7 @@ import {
   retireBootstrapCleanup,
   retireLegacyCombinedBootstrap,
 } from "./legacyBootstrap";
+import { installPageScrollBridge } from "./pageScrollBridge";
 
 declare global {
   interface Window {
@@ -39,6 +41,7 @@ export function initTopFrameOverlay(): void {
 
   let settings = normalizeTabTrailSettings(null);
   let disposed = false;
+  const scrollBridge = installPageScrollBridge();
   let overlayController: OverlayFrameController | null = createOverlayFrameController({
     onPositionChange: async (position) => {
       settings = { ...settings, overlayPosition: position };
@@ -103,6 +106,13 @@ export function initTopFrameOverlay(): void {
         } catch (_) {
           return Promise.resolve({ ok: false, reason: "history.go failed" });
         }
+      case "TRAIL_RESTORE_SCROLL":
+        return scrollBridge.handleRestoreScroll({
+          url: typed.url,
+          viewport: typed.viewport,
+          mode: typed.mode,
+          generation: typed.generation,
+        });
       default:
         return undefined;
     }
@@ -120,6 +130,7 @@ export function initTopFrameOverlay(): void {
     disposed = true;
     window.removeEventListener("pagehide", destroyOpenOverlay);
     document.removeEventListener("visibilitychange", visibilityChangeHandler);
+    scrollBridge.dispose();
     overlayController?.close({ mode: "destroy", reason: "Content script stopped" });
     overlayController?.dispose();
     overlayController = null;
