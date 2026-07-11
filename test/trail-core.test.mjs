@@ -77,6 +77,63 @@ function urls(state) {
   return state.entries.map((entry) => entry.url);
 }
 
+// --- toggle trigger helpers ---
+
+test("toToggleTriggerEvent maps keyboard and mouse DOM-like events", async () => {
+  const core = await loadTrailCoreModule();
+  assert.deepEqual(
+    core.toToggleTriggerEvent({
+      type: "keydown",
+      code: "KeyH",
+      altKey: true,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false,
+      isTrusted: true,
+    }),
+    {
+      type: "keydown",
+      code: "KeyH",
+      altKey: true,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false,
+      isTrusted: true,
+    },
+  );
+  assert.deepEqual(
+    core.toToggleTriggerEvent({
+      type: "mousedown",
+      button: 2,
+      altKey: false,
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: true,
+      isTrusted: true,
+    }),
+    {
+      type: "mousedown",
+      button: 2,
+      altKey: false,
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: true,
+      isTrusted: true,
+    },
+  );
+});
+
+test("isMouseChordFollowUp only ties contextmenu to the right button", async () => {
+  const core = await loadTrailCoreModule();
+  assert.equal(core.isMouseChordFollowUp({ type: "click", button: 1 }, 1), true);
+  assert.equal(core.isMouseChordFollowUp({ type: "click", button: 2 }, 1), false);
+  assert.equal(core.isMouseChordFollowUp({ type: "contextmenu", button: 0 }, 2), true);
+  assert.equal(core.isMouseChordFollowUp({ type: "contextmenu", button: 0 }, 1), false);
+  assert.equal(core.MOUSE_CHORD_SWALLOW_WINDOW_MS, 600);
+});
+
 // --- matchesToggleTrigger truth table ---
 
 test("keyboard trigger matches the exact configured chord", async () => {

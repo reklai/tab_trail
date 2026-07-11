@@ -25,7 +25,59 @@ export interface ToggleTriggerEvent {
   isTrusted: boolean;
 }
 
+// DOM event fields used to build a ToggleTriggerEvent. Avoids depending on
+// global KeyboardEvent/MouseEvent types so core stays runnable under node:test.
+export interface ToggleTriggerDomEventLike {
+  type: string;
+  code?: string;
+  button?: number;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  repeat?: boolean;
+  isTrusted: boolean;
+}
+
 const MODIFIER_KEYS: readonly TabTrailModifierKey[] = ["alt", "ctrl", "super"];
+
+// How long after a matched mouse chord we swallow its follow-up events
+// (click/auxclick/contextmenu) so middle-click does not autoscroll and
+// right-click does not open the native context menu.
+export const MOUSE_CHORD_SWALLOW_WINDOW_MS = 600;
+
+export function toToggleTriggerEvent(event: ToggleTriggerDomEventLike): ToggleTriggerEvent {
+  if (event.type === "keydown") {
+    return {
+      type: "keydown",
+      code: event.code,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+      repeat: event.repeat,
+      isTrusted: event.isTrusted,
+    };
+  }
+  return {
+    type: "mousedown",
+    button: event.button,
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+    isTrusted: event.isTrusted,
+  };
+}
+
+/** Whether a click/auxclick/contextmenu belongs to a previously matched mouse chord. */
+export function isMouseChordFollowUp(
+  event: { type: string; button: number },
+  swallowedButton: number,
+): boolean {
+  if (event.type === "contextmenu") return swallowedButton === 2;
+  return event.button === swallowedButton;
+}
 
 // True only when the event is exactly the configured chord: the chosen
 // modifier held, every other modifier released, Shift matching the setting,
