@@ -26,7 +26,9 @@ const shared = {
   bundle: true,
   format: "iife",
   target: "es2022",
-  minify: false,
+  // Keep watch output readable for debugging while reducing parse/evaluation
+  // work in the production bundles loaded by the browser.
+  minify: !watching,
   sourcemap: false,
 };
 

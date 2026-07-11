@@ -45,9 +45,11 @@ function main() {
   mkdirSync(releaseDir, { recursive: true });
 
   run("npm", ["run", "build:firefox"]);
+  run("npm", ["run", "verify:bundles", "--", "--target", "firefox"]);
   zipDirectory(dist, resolve(releaseDir, `tabtrail-firefox-v${version}.xpi`));
 
   run("npm", ["run", "build:chrome"]);
+  run("npm", ["run", "verify:bundles", "--", "--target", "chrome"]);
   zipDirectory(dist, resolve(releaseDir, `tabtrail-chrome-v${version}.zip`));
 
   zipSource(resolve(releaseDir, `tabtrail-source-v${version}.zip`));
