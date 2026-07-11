@@ -26,9 +26,10 @@ import {
   type OverlayRpcResultMap,
   type OverlaySurfaceRect,
 } from "../../lib/common/contracts/overlayFrame";
+import { installMouseChordGuard } from "../../lib/common/utils/mouseChordGuard";
 import {
   matchesToggleTrigger,
-  type ToggleTriggerEvent,
+  toToggleTriggerEvent,
 } from "../../lib/core/trail/trailCore";
 import {
   hideBreadcrumbTrail,
@@ -40,9 +41,6 @@ import {
 import { closeOverlaySurface } from "../../lib/ui/panels/breadcrumbTrail/overlaySurfaces";
 
 const RPC_TIMEOUT_MS = 15000;
-// Keep the guard alive long enough for click/auxclick/contextmenu events that
-// the matched mousedown schedules after the overlay starts closing.
-const MOUSE_CHORD_SWALLOW_WINDOW_MS = 600;
 const HIT_SURFACE_SELECTOR = "[data-tabtrail-hit-surface]";
 
 interface PendingRpc {
@@ -55,15 +53,18 @@ interface PendingRpc {
 let port: MessagePort | null = null;
 let initialized = false;
 let shuttingDown = false;
+/** Suppress LIVE_CLOSE when the host is hibernating us (host already knows). */
+let hibernating = false;
 let latestSettings: TabTrailSettings | null = null;
 let nextRequestId = 0;
 let nextSurfaceSequence = 0;
 let geometryFrame = 0;
+let geometryForcePending = false;
 let previousSurfaceRects: OverlaySurfaceRect[] = [];
 let previousLayoutKey = "";
 let sendContractionNextFrame = false;
-let swallowMouseUntil = 0;
-let swallowedMouseButton = -1;
+let geometryObserversCleanup: (() => void) | null = null;
+const mouseChordGuard = installMouseChordGuard(document);
 const pendingRpcs = new Map<number, PendingRpc>();
 const savedTrailSubscribers = new Set<(trails: SavedTrail[]) => void>();
 const candidatePorts = new Set<MessagePort>();
@@ -222,6 +223,23 @@ function uniqueRects(rects: readonly OverlaySurfaceRect[]): OverlaySurfaceRect[]
   return unique;
 }
 
+function hasSameSurfaceGeometry(
+  first: readonly OverlaySurfaceRect[],
+  second: readonly OverlaySurfaceRect[],
+): boolean {
+  const firstKeys = new Set(first.map((rect) => (
+    `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+  )));
+  const secondKeys = new Set(second.map((rect) => (
+    `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+  )));
+  if (firstKeys.size !== secondKeys.size) return false;
+  for (const key of firstKeys) {
+    if (!secondKeys.has(key)) return false;
+  }
+  return true;
+}
+
 function sendSurfaceRects(rects: OverlaySurfaceRect[]): void {
   if (rects.length > OVERLAY_FRAME_MAX_SURFACES) {
     postToHost({
@@ -249,17 +267,97 @@ function sendMeasuredSurfaceGeometry(force: boolean): void {
     sendSurfaceRects(transitionalRects);
     previousSurfaceRects = currentRects;
     previousLayoutKey = layoutKey;
-    sendContractionNextFrame = true;
+    sendContractionNextFrame = !hasSameSurfaceGeometry(transitionalRects, currentRects);
   } else if (force || sendContractionNextFrame) {
     sendSurfaceRects(currentRects);
     sendContractionNextFrame = false;
   }
 }
 
-function reportSurfaceGeometry(): void {
+// Coalesce geometry work onto one animation frame. Continuous per-frame
+// sampling was the old path; invalidation (DOM mutation, resize, host request,
+// or a one-frame contraction handoff) drives updates now.
+function scheduleSurfaceGeometry(force = false): void {
+  if (force) geometryForcePending = true;
   if (!port || shuttingDown) return;
-  sendMeasuredSurfaceGeometry(false);
-  geometryFrame = requestAnimationFrame(reportSurfaceGeometry);
+  if (geometryFrame) return;
+  geometryFrame = requestAnimationFrame(() => {
+    geometryFrame = 0;
+    if (!port || shuttingDown) return;
+    const forceNow = geometryForcePending;
+    geometryForcePending = false;
+    sendMeasuredSurfaceGeometry(forceNow);
+    if (sendContractionNextFrame) scheduleSurfaceGeometry(true);
+  });
+}
+
+function sendSurfaceGeometryImmediately(force = false): void {
+  if (force) geometryForcePending = false;
+  sendMeasuredSurfaceGeometry(force);
+  if (sendContractionNextFrame) scheduleSurfaceGeometry(true);
+}
+
+function installGeometryObservers(): void {
+  geometryObserversCleanup?.();
+  const cleanups: Array<() => void> = [];
+  const onInvalidate = (): void => scheduleSurfaceGeometry();
+  window.addEventListener("resize", onInvalidate);
+  window.visualViewport?.addEventListener("resize", onInvalidate);
+  cleanups.push(() => {
+    window.removeEventListener("resize", onInvalidate);
+    window.visualViewport?.removeEventListener("resize", onInvalidate);
+  });
+
+  const host = document.getElementById("ht-panel-host");
+  const shadow = host?.shadowRoot;
+  // Hit-surface box changes drive geometry. Prefer ResizeObserver on surfaces;
+  // keep a narrow MutationObserver for structure/class/style that can alter boxes
+  // without a resize (hidden, class layout flips). Skip characterData noise.
+  if (host && typeof ResizeObserver === "function") {
+    const resizeObserver = new ResizeObserver(() => scheduleSurfaceGeometry());
+    resizeObserver.observe(host);
+    const observeHitSurfaces = (): void => {
+      if (!shadow) return;
+      for (const element of shadow.querySelectorAll(HIT_SURFACE_SELECTOR)) {
+        resizeObserver.observe(element);
+      }
+      const layer = shadow.querySelector(".wf-layer");
+      if (layer instanceof Element) resizeObserver.observe(layer);
+    };
+    observeHitSurfaces();
+    cleanups.push(() => resizeObserver.disconnect());
+    if (shadow && typeof MutationObserver === "function") {
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          if (record.type === "childList") {
+            observeHitSurfaces();
+            break;
+          }
+        }
+        scheduleSurfaceGeometry();
+      });
+      observer.observe(shadow, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["style", "class", "hidden"],
+      });
+      cleanups.push(() => observer.disconnect());
+    }
+  } else if (shadow && typeof MutationObserver === "function") {
+    const observer = new MutationObserver(() => scheduleSurfaceGeometry());
+    observer.observe(shadow, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["style", "class", "hidden"],
+    });
+    cleanups.push(() => observer.disconnect());
+  }
+  geometryObserversCleanup = () => {
+    for (const cleanup of cleanups) cleanup();
+    geometryObserversCleanup = null;
+  };
 }
 
 function deepActiveElement(): Element | null {
@@ -300,57 +398,24 @@ function releaseFocusAtTabBoundary(event: KeyboardEvent): void {
   });
 }
 
-function triggerEvent(event: KeyboardEvent | MouseEvent): ToggleTriggerEvent {
-  if (event instanceof KeyboardEvent) {
-    return {
-      type: "keydown",
-      code: event.code,
-      altKey: event.altKey,
-      ctrlKey: event.ctrlKey,
-      metaKey: event.metaKey,
-      shiftKey: event.shiftKey,
-      repeat: event.repeat,
-      isTrusted: event.isTrusted,
-    };
-  }
-  return {
-    type: "mousedown",
-    button: event.button,
-    altKey: event.altKey,
-    ctrlKey: event.ctrlKey,
-    metaKey: event.metaKey,
-    shiftKey: event.shiftKey,
-    isTrusted: event.isTrusted,
-  };
-}
-
 function onFrameKeyDown(event: KeyboardEvent): void {
   releaseFocusAtTabBoundary(event);
-  if (!latestSettings || !matchesToggleTrigger(triggerEvent(event), latestSettings.trigger)) return;
+  if (!latestSettings || !matchesToggleTrigger(toToggleTriggerEvent(event), latestSettings.trigger)) {
+    return;
+  }
   event.preventDefault();
   event.stopImmediatePropagation();
   void requestHost("LIVE_CLOSE", {}).catch(() => {});
 }
 
 function onFrameMouseDown(event: MouseEvent): void {
-  if (!latestSettings || !matchesToggleTrigger(triggerEvent(event), latestSettings.trigger)) return;
+  if (!latestSettings || !matchesToggleTrigger(toToggleTriggerEvent(event), latestSettings.trigger)) {
+    return;
+  }
   event.preventDefault();
   event.stopImmediatePropagation();
-  swallowMouseUntil = performance.now() + MOUSE_CHORD_SWALLOW_WINDOW_MS;
-  swallowedMouseButton = event.button;
+  mouseChordGuard.arm(event.button);
   void requestHost("LIVE_CLOSE", { mouseButton: event.button }).catch(() => {});
-}
-
-function onFrameMouseFollowUp(event: MouseEvent): void {
-  if (performance.now() > swallowMouseUntil) return;
-  // contextmenu has no useful button identity across browsers, so only a
-  // right-button chord may consume it. click/auxclick must match exactly.
-  const relevant = event.type === "contextmenu"
-    ? swallowedMouseButton === 2
-    : event.button === swallowedMouseButton;
-  if (!relevant) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
 }
 
 function claimFocusOwnership(): void {
@@ -374,6 +439,9 @@ function stopFrame(reason: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   cancelAnimationFrame(geometryFrame);
+  geometryFrame = 0;
+  geometryObserversCleanup?.();
+  mouseChordGuard.dispose();
   rejectPendingRpcs(reason);
   savedTrailSubscribers.clear();
   if (isBreadcrumbTrailOpen()) hideBreadcrumbTrail();
@@ -381,10 +449,14 @@ function stopFrame(reason: string): void {
   port = null;
 }
 
-function initializeUi(state: TrailState, settings: TabTrailSettings): void {
-  if (initialized) throw new Error("Overlay frame initialized twice");
-  initialized = true;
+function mountTrailUi(state: TrailState, settings: TabTrailSettings): void {
   latestSettings = settings;
+  if (isBreadcrumbTrailOpen()) {
+    updateBreadcrumbTrail(state);
+    updateBreadcrumbTrailSettings(settings);
+    sendSurfaceGeometryImmediately(true);
+    return;
+  }
   showBreadcrumbTrail(state, {
     settings,
     savedTrailsClient,
@@ -402,14 +474,42 @@ function initializeUi(state: TrailState, settings: TabTrailSettings): void {
         void requestHost("LIVE_OPEN_OPTIONS", {}).catch(() => {});
       },
       onClose: () => {
-        if (!shuttingDown) void requestHost("LIVE_CLOSE", {}).catch(() => {});
+        if (!shuttingDown && !hibernating) {
+          void requestHost("LIVE_CLOSE", {}).catch(() => {});
+        }
       },
       onPositionChange: (position) => {
         void requestHost("LIVE_SET_POSITION", { position }).catch(() => {});
       },
     },
   });
-  reportSurfaceGeometry();
+  installGeometryObservers();
+  sendSurfaceGeometryImmediately(true);
+}
+
+/** Seed host protocol state only — never mount DOM (HOST_SHOW owns paint). */
+function seedHostState(settings: TabTrailSettings): void {
+  if (initialized) throw new Error("Overlay frame initialized twice");
+  initialized = true;
+  latestSettings = settings;
+}
+
+function hibernateUi(): void {
+  hibernating = true;
+  try {
+    if (isBreadcrumbTrailOpen()) hideBreadcrumbTrail();
+  } finally {
+    hibernating = false;
+  }
+  geometryObserversCleanup?.();
+  cancelAnimationFrame(geometryFrame);
+  geometryFrame = 0;
+  geometryForcePending = false;
+  previousSurfaceRects = [];
+  previousLayoutKey = "";
+  sendContractionNextFrame = false;
+  // Empty surfaces so a leftover clip-path cannot keep host hit-testing alive.
+  sendSurfaceRects([]);
 }
 
 function receiveHostMessage(received: unknown): void {
@@ -426,7 +526,7 @@ function receiveHostMessage(received: unknown): void {
   switch (message.type) {
     case "HOST_INIT":
       try {
-        initializeUi(message.state, message.settings);
+        seedHostState(message.settings);
       } catch (_) {
         postToHost({
           type: "FRAME_ERROR",
@@ -435,15 +535,40 @@ function receiveHostMessage(received: unknown): void {
         });
       }
       return;
+    case "HOST_SHOW":
+      try {
+        if (!initialized) {
+          // Defensive: cold open always sends INIT first; tolerate SHOW alone.
+          seedHostState(message.settings);
+        }
+        mountTrailUi(message.state, message.settings);
+      } catch (_) {
+        postToHost({
+          type: "FRAME_ERROR",
+          version: OVERLAY_FRAME_PROTOCOL_VERSION,
+          reason: "Overlay UI failed to show",
+        });
+      }
+      return;
+    case "HOST_HIBERNATE":
+      hibernateUi();
+      return;
     case "HOST_TRAIL_UPDATED":
-      if (initialized) updateBreadcrumbTrail(message.state);
+      if (initialized && isBreadcrumbTrailOpen()) {
+        updateBreadcrumbTrail(message.state);
+        scheduleSurfaceGeometry();
+      }
       return;
     case "HOST_SETTINGS_UPDATED":
       latestSettings = message.settings;
-      if (initialized) updateBreadcrumbTrailSettings(message.settings);
+      if (initialized && isBreadcrumbTrailOpen()) {
+        updateBreadcrumbTrailSettings(message.settings);
+        scheduleSurfaceGeometry();
+      }
       return;
     case "HOST_SAVED_TRAILS_UPDATED":
       for (const subscriber of savedTrailSubscribers) subscriber(message.trails);
+      scheduleSurfaceGeometry();
       return;
     case "HOST_RPC_RESPONSE": {
       const pending = pendingRpcs.get(message.response.requestId);
@@ -466,6 +591,7 @@ function receiveHostMessage(received: unknown): void {
       // A hidden iframe may not receive another animation frame promptly, so
       // answer the invalidation request immediately even when layout is unchanged.
       sendMeasuredSurfaceGeometry(true);
+      if (sendContractionNextFrame) scheduleSurfaceGeometry(true);
       return;
     case "HOST_ESCAPE":
       dispatchEscape();
@@ -497,9 +623,6 @@ function acceptConnection(connection: OverlayFrameConnection): void {
   document.addEventListener("pointerdown", claimFocusOwnership, true);
   document.addEventListener("keydown", onFrameKeyDown, true);
   document.addEventListener("mousedown", onFrameMouseDown, true);
-  document.addEventListener("auxclick", onFrameMouseFollowUp, true);
-  document.addEventListener("click", onFrameMouseFollowUp, true);
-  document.addEventListener("contextmenu", onFrameMouseFollowUp, true);
   postToHost({ type: "FRAME_READY", version: OVERLAY_FRAME_PROTOCOL_VERSION });
 }
 

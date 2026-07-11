@@ -5,6 +5,9 @@ body {
   margin: 0;
   overflow: hidden;
   overscroll-behavior: none;
+  /* The host briefly clips to both old and new surface rectangles while UI
+     moves. Keep the canvas transparent so those transitional regions, and
+     gaps inside merged surface bounds, do not paint over the page. */
   background: transparent;
 }
 

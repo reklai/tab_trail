@@ -195,6 +195,14 @@ test("host and frame message guards reject mismatched versions and malformed pay
     true,
   );
   assert.equal(
+    protocol.isOverlayHostToFrameMessage({ type: "HOST_HIBERNATE", version }),
+    true,
+  );
+  assert.equal(
+    protocol.isOverlayHostToFrameMessage({ type: "HOST_SHOW", version, state, settings }),
+    true,
+  );
+  assert.equal(
     protocol.isOverlayHostToFrameMessage({
       type: "HOST_SAVED_TRAILS_UPDATED",
       version,

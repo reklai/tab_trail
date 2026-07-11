@@ -47,6 +47,34 @@ async function loadOverlayFrameEntry() {
         }, () => ({
           loader: "js",
           contents: `
+            export const MOUSE_CHORD_SWALLOW_WINDOW_MS = 600;
+            export function toToggleTriggerEvent(event) {
+              if (event.type === "keydown") {
+                return {
+                  type: "keydown",
+                  code: event.code,
+                  altKey: event.altKey,
+                  ctrlKey: event.ctrlKey,
+                  metaKey: event.metaKey,
+                  shiftKey: event.shiftKey,
+                  repeat: event.repeat,
+                  isTrusted: event.isTrusted,
+                };
+              }
+              return {
+                type: "mousedown",
+                button: event.button,
+                altKey: event.altKey,
+                ctrlKey: event.ctrlKey,
+                metaKey: event.metaKey,
+                shiftKey: event.shiftKey,
+                isTrusted: event.isTrusted,
+              };
+            }
+            export function isMouseChordFollowUp(event, swallowedButton) {
+              if (event.type === "contextmenu") return swallowedButton === 2;
+              return event.button === swallowedButton;
+            }
             export function matchesToggleTrigger(event, trigger) {
               if (trigger.kind !== "mouse" || event.type !== "mousedown") return false;
               if (event.button !== trigger.mouseButton || event.shiftKey !== trigger.withShift) {
@@ -64,9 +92,34 @@ async function loadOverlayFrameEntry() {
         }, () => ({
           loader: "js",
           contents: `
-            export function hideBreadcrumbTrail() {}
-            export function isBreadcrumbTrailOpen() { return false; }
-            export function showBreadcrumbTrail() {}
+            let open = false;
+            export function hideBreadcrumbTrail() {
+              open = false;
+              document.getElementById("ht-panel-host")?.remove();
+            }
+            export function isBreadcrumbTrailOpen() { return open; }
+            export function showBreadcrumbTrail() {
+              open = true;
+              const host = document.createElement("div");
+              host.id = "ht-panel-host";
+              const shadow = host.attachShadow({ mode: "open" });
+              const surface = document.createElement("div");
+              surface.dataset.tabtrailHitSurface = "";
+              surface.getClientRects = () => [{ x: 10, y: 12, width: 120, height: 40 }];
+              surface.getBoundingClientRect = () => ({
+                x: 10,
+                y: 12,
+                width: 120,
+                height: 40,
+                left: 10,
+                top: 12,
+                right: 130,
+                bottom: 52,
+                toJSON() {},
+              });
+              shadow.appendChild(surface);
+              document.body.appendChild(host);
+            }
             export function updateBreadcrumbTrail() {}
             export function updateBreadcrumbTrailSettings() {}
           `,
@@ -160,12 +213,41 @@ test("the isolated frame closes on a mouse chord and swallows only its follow-up
     overlayPosition: null,
     maxVisibleSegments: 8,
   };
+  const state = { entries: [], cursor: -1 };
   port.emitMessage({
     type: "HOST_INIT",
     version: PROTOCOL_VERSION,
-    state: { entries: [], cursor: -1 },
+    state,
     settings,
   });
+  assert.equal(
+    port.posted.filter((message) => message.type === "FRAME_SURFACES_UPDATED").length,
+    0,
+    "HOST_INIT seeds protocol state only and does not mount geometry",
+  );
+  port.emitMessage({
+    type: "HOST_SHOW",
+    version: PROTOCOL_VERSION,
+    state,
+    settings,
+  });
+  const initialSurfaceUpdates = port.posted.filter((message) => (
+    message.type === "FRAME_SURFACES_UPDATED"
+  ));
+  assert.equal(
+    initialSurfaceUpdates.length,
+    1,
+    "HOST_SHOW posts its first surface geometry synchronously",
+  );
+  assert.deepEqual(initialSurfaceUpdates[0].rects, [
+    { x: 10, y: 12, width: 120, height: 40 },
+  ], "the synchronous geometry is immediately usable by the host");
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  assert.equal(
+    port.posted.filter((message) => message.type === "FRAME_SURFACES_UPDATED").length,
+    1,
+    "an initial layout with no previous surfaces does not queue a duplicate contraction",
+  );
 
   const button = document.querySelector("button");
   let targetMouseDowns = 0;
@@ -216,6 +298,33 @@ test("the isolated frame closes on a mouse chord and swallows only its follow-up
     targetContextMenus,
     1,
     "a middle-button trigger does not eat an unrelated right-click context menu",
+  );
+
+  port.emitMessage({ type: "HOST_HIBERNATE", version: PROTOCOL_VERSION });
+  const updatesBeforeWarmShow = port.posted.filter((message) => (
+    message.type === "FRAME_SURFACES_UPDATED"
+  )).length;
+  port.emitMessage({
+    type: "HOST_SHOW",
+    version: PROTOCOL_VERSION,
+    state,
+    settings,
+  });
+  assert.equal(
+    port.posted.filter((message) => message.type === "FRAME_SURFACES_UPDATED").length,
+    updatesBeforeWarmShow + 1,
+    "HOST_SHOW posts restored surface geometry synchronously",
+  );
+  assert.deepEqual(
+    port.posted.filter((message) => message.type === "FRAME_SURFACES_UPDATED").at(-1).rects,
+    [{ x: 10, y: 12, width: 120, height: 40 }],
+    "warm geometry is usable without waiting for animation-frame work",
+  );
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  assert.equal(
+    port.posted.filter((message) => message.type === "FRAME_SURFACES_UPDATED").length,
+    updatesBeforeWarmShow + 1,
+    "warm remount does not queue a duplicate contraction",
   );
 
   dom.window.close();

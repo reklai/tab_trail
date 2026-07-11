@@ -1,5 +1,5 @@
 // Pure geometry used by the page-side iframe host. The extension document
-// reports DOM rectangles; this module validates, pads, clamps, sequences, and
+// reports DOM rectangles; this module validates, clamps, sequences, and
 // converts them into one clip-path with a separate closed subpath per surface.
 // Separate subpaths preserve click-through gaps between disjoint surfaces.
 
@@ -8,7 +8,11 @@ import {
   type OverlaySurfaceRect,
 } from "../../common/contracts/overlayFrame";
 
-export const OVERLAY_SURFACE_PADDING_PX = 4;
+// Keep the iframe clip flush with each rendered surface. Firefox/Zen may paint
+// an extension iframe's transparent canvas white, so exposing padding around a
+// surface creates a visible white frame.
+export const OVERLAY_SURFACE_PADDING_PX = 0;
+export const OVERLAY_SURFACE_CLIP_RADIUS_PX = 8;
 export const OVERLAY_EMPTY_CLIP_PATH = "inset(50%)";
 const MAX_PADDING_PX = 64;
 
@@ -94,11 +98,28 @@ function formatCoordinate(value: number): string {
 export function buildOverlaySurfaceClipPath(rects: readonly OverlaySurfaceRect[]): string {
   if (rects.length === 0) return OVERLAY_EMPTY_CLIP_PATH;
   const subpaths = rects.map((rect) => {
-    const left = formatCoordinate(rect.x);
-    const top = formatCoordinate(rect.y);
-    const right = formatCoordinate(rect.x + rect.width);
-    const bottom = formatCoordinate(rect.y + rect.height);
-    return `M ${left} ${top} H ${right} V ${bottom} H ${left} Z`;
+    const leftValue = rect.x;
+    const topValue = rect.y;
+    const rightValue = rect.x + rect.width;
+    const bottomValue = rect.y + rect.height;
+    const radiusValue = Math.min(
+      OVERLAY_SURFACE_CLIP_RADIUS_PX,
+      rect.width / 2,
+      rect.height / 2,
+    );
+    const left = formatCoordinate(leftValue);
+    const top = formatCoordinate(topValue);
+    const right = formatCoordinate(rightValue);
+    const bottom = formatCoordinate(bottomValue);
+    const leftInner = formatCoordinate(leftValue + radiusValue);
+    const rightInner = formatCoordinate(rightValue - radiusValue);
+    const topInner = formatCoordinate(topValue + radiusValue);
+    const bottomInner = formatCoordinate(bottomValue - radiusValue);
+    return `M ${leftInner} ${top} H ${rightInner} ` +
+      `Q ${right} ${top} ${right} ${topInner} V ${bottomInner} ` +
+      `Q ${right} ${bottom} ${rightInner} ${bottom} H ${leftInner} ` +
+      `Q ${left} ${bottom} ${left} ${bottomInner} V ${topInner} ` +
+      `Q ${left} ${top} ${leftInner} ${top} Z`;
   });
   return `path("${subpaths.join(" ")}")`;
 }

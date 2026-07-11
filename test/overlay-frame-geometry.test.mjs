@@ -17,7 +17,7 @@ function loadGeometry() {
   return geometryPromise;
 }
 
-test("surface updates are padded, clamped to the viewport, and fully outside rects are dropped", async () => {
+test("surface updates are flush, clamped to the viewport, and fully outside rects are dropped", async () => {
   const geometry = await loadGeometry();
   const result = geometry.validateSurfaceUpdate(
     {
@@ -36,12 +36,12 @@ test("surface updates are padded, clamped to the viewport, and fully outside rec
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.value.rects, [
-    { x: 0, y: 1, width: 22, height: 18 },
-    { x: 91, y: 41, width: 9, height: 9 },
+    { x: 0, y: 5, width: 18, height: 10 },
+    { x: 95, y: 45, width: 5, height: 5 },
   ]);
   assert.equal(
     result.value.clipPath,
-    'path("M 0 1 H 22 V 19 H 0 Z M 91 41 H 100 V 50 H 91 Z")',
+    'path("M 5 5 H 13 Q 18 5 18 10 V 10 Q 18 15 13 15 H 5 Q 0 15 0 10 V 10 Q 0 5 5 5 Z M 97.5 45 H 97.5 Q 100 45 100 47.5 V 47.5 Q 100 50 97.5 50 H 97.5 Q 95 50 95 47.5 V 47.5 Q 95 45 97.5 45 Z")',
   );
 });
 
@@ -54,7 +54,7 @@ test("clip paths keep disjoint surfaces in separate closed subpaths", async () =
 
   assert.equal(
     clipPath,
-    'path("M 1 2 H 11 V 22 H 1 Z M 50 60 H 55 V 66 H 50 Z")',
+    'path("M 6 2 H 6 Q 11 2 11 7 V 17 Q 11 22 6 22 H 6 Q 1 22 1 17 V 7 Q 1 2 6 2 Z M 52.5 60 H 52.5 Q 55 60 55 62.5 V 63.5 Q 55 66 52.5 66 H 52.5 Q 50 66 50 63.5 V 62.5 Q 50 60 52.5 60 Z")',
   );
   assert.equal((clipPath.match(/\bM\b/g) || []).length, 2);
   assert.equal(geometry.buildOverlaySurfaceClipPath([]), geometry.OVERLAY_EMPTY_CLIP_PATH);

@@ -116,6 +116,7 @@ export type OverlayRpcResponse<M extends OverlayRpcMethod = OverlayRpcMethod> = 
 
 export type OverlayHostToFrameMessage =
   | {
+      // Seed frame protocol/settings only. DOM paint is always HOST_SHOW.
       type: "HOST_INIT";
       version: typeof OVERLAY_FRAME_PROTOCOL_VERSION;
       state: TrailState;
@@ -161,6 +162,19 @@ export type OverlayHostToFrameMessage =
       type: "HOST_PING";
       version: typeof OVERLAY_FRAME_PROTOCOL_VERSION;
       heartbeatId: number;
+    }
+  | {
+      // Soft-hide the UI but keep the frame document and MessagePort warm so the
+      // next open can skip iframe load + claim handshake.
+      type: "HOST_HIBERNATE";
+      version: typeof OVERLAY_FRAME_PROTOCOL_VERSION;
+    }
+  | {
+      // Re-show the live trail after HOST_HIBERNATE without re-authenticating.
+      type: "HOST_SHOW";
+      version: typeof OVERLAY_FRAME_PROTOCOL_VERSION;
+      state: TrailState;
+      settings: TabTrailSettings;
     }
   | {
       type: "HOST_SHUTDOWN";
@@ -512,6 +526,11 @@ export function isOverlayHostToFrameMessage(value: unknown): value is OverlayHos
     case "HOST_PING":
       return hasOnlyKeys(value, ["type", "version", "heartbeatId"]) &&
         isNonNegativeSafeInteger(value.heartbeatId);
+    case "HOST_HIBERNATE":
+      return hasOnlyKeys(value, ["type", "version"]);
+    case "HOST_SHOW":
+      return hasOnlyKeys(value, ["type", "version", "state", "settings"]) &&
+        isTrailState(value.state) && isSettings(value.settings);
     case "HOST_SHUTDOWN":
       return hasOnlyKeys(value, ["type", "version"], ["reason"]) &&
         isOptionalString(value.reason);

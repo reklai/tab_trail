@@ -2,7 +2,7 @@
 // Run with `npm run test:browser:firefox` or `npm run test:browser:chrome`.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -12,8 +12,57 @@ import firefox from "selenium-webdriver/firefox.js";
 
 const root = process.cwd();
 const browserName = process.argv[2];
+const COLD_OPEN_BUDGET_MS = 250;
+const WARM_OPEN_BUDGET_MS = 50;
 if (browserName !== "firefox" && browserName !== "chrome") {
   throw new Error("Expected browser argument: firefox or chrome");
+}
+
+async function waitForNumericAttribute(driver, element, attribute, timeoutMs = 5000) {
+  const rawValue = await driver.wait(async () => {
+    const raw = await element.getAttribute(attribute);
+    if (raw === null || raw.trim() === "") return false;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? raw : false;
+  }, timeoutMs);
+  return Number(rawValue);
+}
+
+function enforceLatencyBudget(label, measuredMs, budgetMs) {
+  if (measuredMs > budgetMs) {
+    throw new Error(`${label} took ${measuredMs.toFixed(2)} ms; budget is ${budgetMs} ms`);
+  }
+}
+
+async function assertBarPresentation(driver) {
+  const result = await driver.executeScript(`
+    const panel = document.getElementById("ht-panel-host");
+    const bar = panel && panel.shadowRoot && panel.shadowRoot.querySelector(".wf-bar");
+    if (!bar) return null;
+    const style = getComputedStyle(bar);
+    return {
+      opacity: style.opacity,
+      borderWidths: [
+        style.borderTopWidth,
+        style.borderRightWidth,
+        style.borderBottomWidth,
+        style.borderLeftWidth
+      ],
+      outlineStyle: style.outlineStyle,
+      boxShadow: style.boxShadow,
+      animations: typeof bar.getAnimations === "function" ? bar.getAnimations().length : -1
+    };
+  `);
+  if (
+    !result ||
+    result.opacity !== "1" ||
+    result.animations !== 0 ||
+    result.borderWidths.some((width) => width !== "0px") ||
+    result.outlineStyle !== "none" ||
+    result.boxShadow !== "none"
+  ) {
+    throw new Error(`Overlay bar retained motion or a decorative edge: ${JSON.stringify(result)}`);
+  }
 }
 
 function run(command, args, cwd = root) {
@@ -31,7 +80,7 @@ if (browserName === "firefox") {
   run("zip", ["-r", "-q", firefoxArchive, "."], resolve(root, "dist"));
 }
 
-const hostilePage = `<!doctype html><html><body style="height:3000px">
+const hostilePage = `<!doctype html><html><body style="height:3000px;background:#35688f;color:#fff">
   <input id="pageInput" value="page-seed"><video id="video"></video>
   <button id="outside" style="position:fixed;left:8px;top:100px">outside</button>
   <script>
@@ -66,6 +115,7 @@ const pageUrl = `http://127.0.0.1:${address.port}/a`;
 
 let driver;
 let extensionOrigin = "";
+let extensionControlHandle = "";
 try {
   const builder = new Builder().forBrowser(browserName);
   if (browserName === "firefox") {
@@ -113,6 +163,12 @@ try {
         }
       }).then(() => done(true), (error) => done(String(error)));
     `);
+    // Keep an extension-origin control tab alive for privileged tabs.sendMessage
+    // calls, then create the actual page in a separate tab. Opening the control
+    // tab after navigating to the page can replace the only page tab in Zen's
+    // headless WebDriver implementation.
+    extensionControlHandle = await driver.getWindowHandle();
+    await driver.switchTo().newWindow("tab");
   } else {
     const chromeOptions = new chrome.Options().addArguments(
       "--headless=new",
@@ -133,8 +189,7 @@ try {
   await pageInput.click();
   if (browserName === "firefox") {
     const pageHandle = await driver.getWindowHandle();
-    await driver.switchTo().newWindow("tab");
-    await driver.get(`${extensionOrigin}/optionsPage/optionsPage.html`);
+    await driver.switchTo().window(extensionControlHandle);
     const openResult = await driver.executeAsyncScript(`
       const done = arguments[arguments.length - 1];
       browser.tabs.query({}).then((tabs) => {
@@ -179,11 +234,32 @@ try {
       cause: error,
     });
   }
+  const coldKind = await host.getAttribute("data-tabtrail-open-kind");
+  const coldSequence = Number(await host.getAttribute("data-tabtrail-open-sequence"));
+  const coldHostLatency = await waitForNumericAttribute(
+    driver,
+    host,
+    "data-tabtrail-host-open-latency-ms",
+  );
+  if (coldKind !== "cold" || !Number.isInteger(coldSequence) || coldSequence < 1) {
+    throw new Error(`Invalid cold-open diagnostics: kind=${coldKind}, sequence=${coldSequence}`);
+  }
+  enforceLatencyBudget("Cold host open", coldHostLatency, COLD_OPEN_BUDGET_MS);
+  let coldToggleLatency = null;
+  if (browserName === "chrome") {
+    coldToggleLatency = await waitForNumericAttribute(
+      driver,
+      host,
+      "data-tabtrail-toggle-latency-ms",
+    );
+    enforceLatencyBudget("Cold chord-to-visible open", coldToggleLatency, COLD_OPEN_BUDGET_MS);
+  }
   await driver.executeScript(
     "window.pageEvents = { keys: 0, keyDetails: [], mouseDetails: [], wheels: 0, pointers: 0, videoF: 0 }",
   );
   const outerShadow = await host.getShadowRoot();
   const frame = await outerShadow.findElement(By.css("iframe"));
+  await driver.wait(async () => (await frame.getCssValue("visibility")) === "visible", 5000);
   await driver.switchTo().frame(frame);
   let panelHost;
   try {
@@ -200,6 +276,11 @@ try {
     });
   }
   const panelShadow = await panelHost.getShadowRoot();
+  await assertBarPresentation(driver);
+  if (process.env.TABTRAIL_SCREENSHOT_PATH) {
+    await driver.sleep(100);
+    writeFileSync(process.env.TABTRAIL_SCREENSHOT_PATH, await driver.takeScreenshot(), "base64");
+  }
   await (await panelShadow.findElement(By.css(".wf-library"))).click();
   const search = await panelShadow.findElement(By.css(".wf-library-search"));
   await search.sendKeys("f", Key.SPACE, Key.ARROW_DOWN);
@@ -225,12 +306,56 @@ try {
     throw new Error(`The isolated frame did not own focus: ${JSON.stringify(pageResult)}`);
   }
 
+  let warmHostLatency = null;
+  let warmToggleLatency = null;
+  {
+    const toggleModifier = browserName === "firefox" ? Key.META : Key.ALT;
+    await driver.switchTo().frame(frame);
+    await search.sendKeys(Key.chord(toggleModifier, "h"));
+    await driver.switchTo().defaultContent();
+    await driver.wait(async () => (await frame.getCssValue("visibility")) === "hidden", 5000);
+
+    await pageInput.click();
+    await pageInput.sendKeys(Key.chord(toggleModifier, "h"));
+    await driver.wait(async () => {
+      const sequence = Number(await host.getAttribute("data-tabtrail-open-sequence"));
+      return Number.isInteger(sequence) && sequence > coldSequence;
+    }, 5000);
+    warmHostLatency = await waitForNumericAttribute(
+      driver,
+      host,
+      "data-tabtrail-host-open-latency-ms",
+    );
+    warmToggleLatency = await waitForNumericAttribute(
+      driver,
+      host,
+      "data-tabtrail-toggle-latency-ms",
+    );
+    const warmKind = await host.getAttribute("data-tabtrail-open-kind");
+    if (warmKind !== "warm") {
+      throw new Error(`Expected warm reopen diagnostics, received kind=${warmKind}`);
+    }
+    enforceLatencyBudget("Warm host open", warmHostLatency, WARM_OPEN_BUDGET_MS);
+    enforceLatencyBudget("Warm chord-to-visible open", warmToggleLatency, WARM_OPEN_BUDGET_MS);
+    await driver.wait(async () => (await frame.getCssValue("visibility")) === "visible", 5000);
+    await driver.switchTo().frame(frame);
+    await driver.wait(until.elementLocated(By.id("ht-panel-host")), 5000);
+    await assertBarPresentation(driver);
+    await driver.switchTo().defaultContent();
+  }
+
   await (await driver.findElement(By.id("outside"))).click();
   await driver.sleep(100);
   const outsidePointers = await driver.executeScript("return window.pageEvents.pointers");
   if (outsidePointers < 1) throw new Error("A click outside TabTrail did not reach the page");
 
-  console.log(`[browser:${browserName}] overlay precedence OK`);
+  console.log(
+    `[browser:${browserName}] overlay precedence and latency OK ` +
+      `(cold host ${coldHostLatency.toFixed(2)} ms` +
+      `${coldToggleLatency == null ? "" : `, cold toggle ${coldToggleLatency.toFixed(2)} ms`}, ` +
+      `warm host ${warmHostLatency.toFixed(2)} ms, ` +
+      `warm toggle ${warmToggleLatency.toFixed(2)} ms)`,
+  );
 } finally {
   if (driver) await driver.quit();
   await new Promise((resolveClose) => server.close(resolveClose));
