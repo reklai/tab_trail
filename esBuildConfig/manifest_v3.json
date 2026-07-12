@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Current Tab History - In-Page Trail",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.",
   "minimum_chrome_version": "89",
   "incognito": "split",

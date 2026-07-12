@@ -27,7 +27,7 @@ test("bundle budgets cover every latency-sensitive production bundle", () => {
     BUNDLE_BUDGETS.map(({ path, maxBytes }) => [path, maxBytes]),
     [
       ["overlayFrame/overlayFrame.js", 140 * 1024],
-      ["contentScriptTop.js", 45 * 1024],
+      ["contentScriptTop.js", 46 * 1024],
       ["contentScriptChord.js", 20 * 1024],
       ["contentScript.js", 50 * 1024],
       ["background.js", 45 * 1024],

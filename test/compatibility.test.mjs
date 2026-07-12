@@ -46,7 +46,7 @@ test("manifests and package share the same version", () => {
   const v3 = readJson("esBuildConfig/manifest_v3.json");
   const packageJson = readJson("package.json");
 
-  assert.equal(packageJson.version, "1.0.0");
+  assert.match(packageJson.version, /^\d+\.\d+\.\d+$/);
   assert.equal(v2.version, packageJson.version);
   assert.equal(v3.version, packageJson.version);
 });

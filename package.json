@@ -1,6 +1,6 @@
 {
   "name": "tabtrail-extension",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Stop losing your place in a tab. See your current tab history, preview earlier pages, and jump back without repeated Back clicks.",
   "license": "MIT",

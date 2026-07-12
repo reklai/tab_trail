@@ -54,6 +54,10 @@ test("PRIVACY documents the stored keys and the no-collection stance", () => {
   assert.match(privacy, /does not collect, transmit, or share/);
   assert.match(privacy, /viewport pixel offsets \(scroll position\)/);
   assert.match(privacy, /never page content/i);
+  assert.match(privacy, /Network activity/i);
+  assert.match(privacy, /credentials:\s*"omit"|credentials: "omit"|credentials omit/i);
+  assert.match(privacy, /does \*\*not\*\* phone home|does not phone home/i);
+  assert.match(privacy, /extension-origin iframe|web_accessible_resources/);
 });
 
 test("docs carry no leftover branding from earlier concepts", () => {

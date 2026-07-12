@@ -1,8 +1,9 @@
 # Privacy Policy - In-Page Trail
 
-In-Page Trail **does not collect, transmit, or share** any personal data. There are
-no analytics, no telemetry, no external servers, and no network requests made by
-the extension. Everything stays on your device.
+In-Page Trail **does not collect, transmit, or share** any personal data with the
+developer or any third-party analytics service. There are no analytics, no
+telemetry, and no In-Page Trail backend. Trail data stays on your device in
+extension storage (and in memory for private windows).
 
 ## What is stored, and where
 
@@ -34,18 +35,39 @@ Only page titles, URLs, and numeric viewport offsets are recorded - never page c
 form data, keystrokes, or screenshots. Named snapshots store only the path you chose
 to save, not full browsing history.
 
+## Network activity
+
+In-Page Trail does **not** phone home. The only optional network activity is
+user-driven and limited to URLs already on your trail:
+
+- **Trail row preview.** When you open a preview, the extension may issue a
+  short `HEAD` (and, if needed, headers-only `GET`) request to **that same page
+  URL** to read framing headers (`X-Frame-Options` / CSP `frame-ancestors`) and
+  decide whether an embed is allowed. Requests use `credentials: "omit"` and do
+  not upload trail data. If the site allows embedding, the preview may load that
+  URL in an extension-hosted iframe the way a normal tab load would.
+- No other remote endpoints are contacted for analytics, accounts, sync, or
+  crash reporting.
+
+## Overlay surface
+
+The trail UI runs in an **extension-origin iframe** (`web_accessible_resources`)
+so page scripts cannot read overlay events or state. Communication with the page
+host uses an authenticated `MessagePort` and stays inside the browser.
+
 ## Permissions and why they are needed
 
 - `webNavigation` - observe when a tab commits a navigation (including SPA
   pushState and hash changes) so the trail can be recorded.
 - `tabs` - read tab titles and favicon URLs for trail entries, and navigate a
   tab when you click a trail row.
-- `storage` - persist the settings and session-scoped trails described above.
+- `storage` - persist the settings, named saved trails, and session-scoped
+  trail mirrors described above.
 - `scripting` - (Chrome) re-inject the content script into open tabs after
   install or update.
-- `<all_urls>` - run the small content script that listens for the shortcut and
-  renders the trail overlay. It never reads page content or sends anything
-  anywhere.
+- `<all_urls>` - run the content scripts that capture the shortcut, host the
+  overlay frame, and sample scroll offsets for restore. They do not read page
+  DOM content into durable storage and do not send data to the developer.
 
 ## Contact
 

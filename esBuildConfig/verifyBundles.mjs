@@ -9,7 +9,8 @@ const KB = 1024;
 
 export const BUNDLE_BUDGETS = Object.freeze([
   { path: "overlayFrame/overlayFrame.js", maxBytes: 140 * KB },
-  { path: "contentScriptTop.js", maxBytes: 45 * KB },
+  // Host + overlay RPC + saved-trail client; small headroom for gate-safe loads.
+  { path: "contentScriptTop.js", maxBytes: 46 * KB },
   { path: "contentScriptChord.js", maxBytes: 20 * KB },
   { path: "contentScript.js", maxBytes: 50 * KB },
   { path: "background.js", maxBytes: 45 * KB },

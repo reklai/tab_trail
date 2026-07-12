@@ -31,6 +31,7 @@ GitHub issues, or research links and need to recover your place quickly.
 - Saved trail names and complete navigation trees must be unique; shorter or
   longer versions of a path can still be saved separately.
 - Keep live trails session-only; named paths persist only when you save them.
+- Restore last-known scroll when jumping or reopening a path (best-effort).
 
 In-Page Trail is focused on in-tab navigation history. It is not a full tab manager,
 session restore tool, bookmark manager, or closed-tab recovery extension.
@@ -38,7 +39,9 @@ session restore tool, bookmark manager, or closed-tab recovery extension.
 No data leaves your browser. Works on Firefox, Chrome, and Zen Browser.
 
 We use the `webNavigation` API to record page titles and URLs only: no content
-is read, nothing is transmitted, and there are no analytics. On browser pages
+is read, nothing is sent to analytics or an In-Page Trail server, and there are
+no accounts or sync. Optional trail previews may briefly contact the same page
+URL you already opened (framing-header check / embed). On browser pages
 (`about:`, `chrome://`) where extension content scripts cannot run, the shortcut
 and in-page trail are unavailable; the toolbar popup still lets you adjust the
 shortcut and open settings.
