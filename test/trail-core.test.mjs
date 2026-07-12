@@ -800,3 +800,52 @@ test("savedTrailEndpoint returns the last entry", async () => {
   ]);
   assert.equal(core.savedTrailEndpoint(trail)?.url, "https://b.test/");
 });
+
+test("shouldApplyInheritedSeed fill refuses longer same-lineage and multi-hop races", async () => {
+  const core = await loadTrailCoreModule();
+  const seeded = core.createInheritedTrailState([
+    sampleEntry("https://a.test/"),
+    sampleEntry("https://b.test/"),
+  ]);
+  const empty = core.EMPTY_TRAIL_STATE;
+  assert.equal(core.shouldApplyInheritedSeed(empty, seeded, "fill"), true);
+
+  const coldEndpoint = {
+    entries: [sampleEntry("https://b.test/")],
+    cursor: 0,
+  };
+  assert.equal(core.shouldApplyInheritedSeed(coldEndpoint, seeded, "fill"), true);
+
+  const sameLineageExtended = {
+    entries: [
+      ...seeded.entries,
+      sampleEntry("https://c.test/"),
+    ],
+    cursor: 2,
+  };
+  assert.equal(
+    core.shouldApplyInheritedSeed(sameLineageExtended, seeded, "fill"),
+    false,
+  );
+
+  const multiHopCold = {
+    entries: [
+      sampleEntry("https://b.test/"),
+      sampleEntry("https://c.test/"),
+      sampleEntry("https://d.test/"),
+    ],
+    cursor: 2,
+  };
+  assert.equal(core.shouldApplyInheritedSeed(multiHopCold, seeded, "fill"), false);
+
+  // replace always installs the open-current path over an unrelated live trail.
+  assert.equal(
+    core.shouldApplyInheritedSeed(multiHopCold, seeded, "replace"),
+    true,
+  );
+  assert.equal(core.shouldApplyInheritedSeed(empty, seeded, "replace"), true);
+  assert.equal(
+    core.shouldApplyInheritedSeed(seeded, core.EMPTY_TRAIL_STATE, "fill"),
+    false,
+  );
+});

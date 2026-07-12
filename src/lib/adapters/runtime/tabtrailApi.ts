@@ -82,6 +82,19 @@ export async function refreshTabTrailExtension(): Promise<TabTrailActionResult> 
   return sendRuntimeMessageWithRetry<TabTrailActionResult>({ type: "TABTRAIL_REFRESH_EXTENSION" });
 }
 
+export async function loadNamedTrails(): Promise<SavedTrail[]> {
+  const result = await sendRuntimeMessageWithRetry<{ ok: true; trails: SavedTrail[] } | {
+    ok: false;
+    reason?: string;
+  }>({
+    type: "SAVED_TRAIL_LOAD",
+  });
+  if (result && typeof result === "object" && result.ok === true && Array.isArray(result.trails)) {
+    return result.trails;
+  }
+  return [];
+}
+
 export async function openSavedTrail(
   path: TrailEntry[],
   mode: SavedTrailOpenMode,

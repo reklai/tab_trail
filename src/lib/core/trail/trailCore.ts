@@ -381,6 +381,52 @@ export function createInheritedTrailState(path: TrailEntry[]): TrailState {
   };
 }
 
+/**
+ * Seed policy for eventual inherited-open bookkeeping.
+ *
+ * - `replace`: always install the seeded snapshot (open-in-current must overwrite
+ *   an unrelated live trail with the chosen path).
+ * - `fill`: install only when the map is empty/shorter/unrelated; never clobber a
+ *   live trail that is already a same-lineage extension of the seed, or a longer
+ *   cold multi-hop chain that landed before seed (common during tabs.create).
+ */
+export type InheritedSeedPolicy = "replace" | "fill";
+
+/**
+ * Whether an eventual inherited-open seed should replace the live map entry.
+ * Callers build `seeded` first (including synthetic redirect hops for the live
+ * URL); this pure gate only decides overwrite vs keep.
+ */
+export function shouldApplyInheritedSeed(
+  existing: TrailState,
+  seeded: TrailState,
+  policy: InheritedSeedPolicy = "fill",
+): boolean {
+  if (seeded.entries.length === 0) return false;
+  if (existing.entries.length === 0) return true;
+  if (policy === "replace") return true;
+
+  const existingUrls = existing.entries.map((entry) => entry.url);
+  const seededUrls = seeded.entries.map((entry) => entry.url);
+
+  // Live reducer already continued past this seed along the same URL path.
+  if (
+    existingUrls.length > seededUrls.length &&
+    seededUrls.every((url, index) => existingUrls[index] === url)
+  ) {
+    return false;
+  }
+
+  // Longer cold multi-hop (redirect chain / early user nav) won the race with
+  // seed. Prefer the richer live hop chain over collapsing intermediates into
+  // seed + a single synthetic redirect.
+  if (existingUrls.length > seededUrls.length) {
+    return false;
+  }
+
+  return true;
+}
+
 // Path from the root through the selected node (inclusive). Null when the
 // index is out of range or the trail is empty. Shared by live open-in-new-*
 // and the saved-trail library.

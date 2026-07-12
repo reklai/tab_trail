@@ -19,8 +19,10 @@ import {
   normalizeTrailState,
   normalizeViewport,
   resolveJumpPlan,
+  shouldApplyInheritedSeed,
   slicePathToIndex,
   viewportEquals,
+  type InheritedSeedPolicy,
 } from "../../core/trail/trailCore";
 import { createInFlightMemo, createKeyedTaskQueue, sleep } from "../../common/utils/asyncFlow";
 import {
@@ -556,7 +558,11 @@ export function createTrailDomain(): TrailDomain {
     return active?.id ?? null;
   }
 
-  async function seedInheritedTrail(tabId: number, state: TrailState): Promise<void> {
+  async function seedInheritedTrail(
+    tabId: number,
+    state: TrailState,
+    policy: InheritedSeedPolicy,
+  ): Promise<void> {
     let redispatchUrl: string | null = null;
     await tabQueue.run(tabId, async () => {
       await ensureLoaded();
@@ -578,6 +584,19 @@ export function createTrailDomain(): TrailDomain {
             qualifiers: ["server_redirect"],
           }).state
         : state;
+      // Re-read after awaits: nav jobs enqueued before this seed may have built
+      // a richer live trail. fill policy refuses to clobber those; replace
+      // (open-in-current) always installs the chosen path.
+      const existing = getTrailState(tabId);
+      if (!shouldApplyInheritedSeed(existing, seeded, policy)) {
+        // Still re-dispatch restore when the live URL matches pending — seed
+        // losing the map race must not strand force restore.
+        const pending = pendingRestoreByTabId.get(tabId);
+        if (pending && (tab.url === pending.url || liveUrl === normalizePageUrl(pending.url))) {
+          redispatchUrl = pending.url;
+        }
+        return;
+      }
       trailsByTabId.set(tabId, seeded);
       // Title/favicon patch runs in this same queue turn before the mirror so
       // the first durable snapshot includes live metadata when available.
@@ -600,8 +619,12 @@ export function createTrailDomain(): TrailDomain {
   // Callers return { ok: true } before seed finishes, so a brief empty trail
   // on the destination tab is expected. Quiet rejections so fire-and-forget
   // cannot surface as unhandled promise rejections.
-  function scheduleSeedInheritedTrail(tabId: number, state: TrailState): void {
-    void seedInheritedTrail(tabId, state).catch(() => {});
+  function scheduleSeedInheritedTrail(
+    tabId: number,
+    state: TrailState,
+    policy: InheritedSeedPolicy,
+  ): void {
+    void seedInheritedTrail(tabId, state, policy).catch(() => {});
   }
 
   async function createTabFromInheritedTrail(
@@ -622,7 +645,9 @@ export function createTrailDomain(): TrailDomain {
       // CRITICAL: arm pending on created.id — never on the source tab.
       if (created.id != null) {
         armPendingFromEntry(created.id, endpoint, "force", { proactiveDispatch: true });
-        scheduleSeedInheritedTrail(created.id, state);
+        // New tab: fill-if-missing. Early nav/redirect hops must not be
+        // collapsed by a late seed.
+        scheduleSeedInheritedTrail(created.id, state, "fill");
       }
       return { ok: true };
     } catch (_) {
@@ -741,7 +766,7 @@ export function createTrailDomain(): TrailDomain {
       // Seed off the critical path so the window appears immediately.
       if (seededTabId != null && created.incognito === sourceIncognito) {
         armPendingFromEntry(seededTabId, endpoint, "force", { proactiveDispatch: true });
-        scheduleSeedInheritedTrail(seededTabId, inherited);
+        scheduleSeedInheritedTrail(seededTabId, inherited, "fill");
       }
       return { ok: true };
     } catch (_) {
@@ -771,7 +796,9 @@ export function createTrailDomain(): TrailDomain {
         armPendingFromEntry(targetTabId, endpoint, "force");
         await browser.tabs.update(targetTabId, { url: endpoint.url });
         void dispatchPendingRestore(targetTabId, endpoint.url);
-        scheduleSeedInheritedTrail(targetTabId, inherited);
+        // Current-tab open intentionally replaces whatever live trail the tab
+        // had with the chosen path.
+        scheduleSeedInheritedTrail(targetTabId, inherited, "replace");
         return { ok: true };
       } catch (_) {
         clearPendingRestore(targetTabId);

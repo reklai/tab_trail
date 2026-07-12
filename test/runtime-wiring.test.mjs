@@ -33,6 +33,7 @@ test("message handler routes every trail message and falls back to UNHANDLED", (
     "TRAIL_OPEN_IN_NEW_TAB",
     "TRAIL_OPEN_IN_NEW_WINDOW",
     "TRAIL_SCROLL_REPORT",
+    "SAVED_TRAIL_LOAD",
     "SAVED_TRAIL_SAVE",
     "SAVED_TRAIL_RENAME",
     "SAVED_TRAIL_REPLACE",
@@ -46,6 +47,8 @@ test("message handler routes every trail message and falls back to UNHANDLED", (
   ]) {
     assert.match(source, new RegExp(`case "${messageType}"`), `handler must route ${messageType}`);
   }
+  assert.match(source, /loadSavedTrails\(\)/);
+  assert.match(source, /isDurableSavedTrailStorageAccess/);
   assert.match(source, /domain\.applyScrollReport\(/);
   assert.match(source, /domain\.openSavedTrail\(message\.path,/);
   assert.match(source, /saveCapturedTrail\(/);
@@ -83,10 +86,11 @@ test("domain registers all three webNavigation intakes and serializes per tab", 
   assert.match(source, /openEntryInNewWindow/);
   assert.match(source, /openSavedTrail/);
   assert.match(source, /createInheritedTrailState\(path\)/);
-  assert.match(source, /scheduleSeedInheritedTrail\(created\.id, state\)/);
-  assert.match(source, /scheduleSeedInheritedTrail\(seededTabId, inherited\)/);
-  assert.match(source, /scheduleSeedInheritedTrail\(targetTabId, inherited\)/);
-  assert.match(source, /void seedInheritedTrail\(tabId, state\)\.catch\(\(\) => \{\}\)/);
+  assert.match(source, /scheduleSeedInheritedTrail\(created\.id, state, "fill"\)/);
+  assert.match(source, /scheduleSeedInheritedTrail\(seededTabId, inherited, "fill"\)/);
+  assert.match(source, /scheduleSeedInheritedTrail\(targetTabId, inherited, "replace"\)/);
+  assert.match(source, /void seedInheritedTrail\(tabId, state, policy\)\.catch\(\(\) => \{\}\)/);
+  assert.match(source, /shouldApplyInheritedSeed\(existing, seeded, policy\)/);
   assert.match(source, /liveUrl !== endpointUrl/);
   assert.match(source, /pendingJumpByTabId\.set\(targetTabId, \{ index, kind: "navigate" \}\)/);
   assert.match(source, /pendingRestoreByTabId/);
@@ -416,7 +420,9 @@ test("saved trails panel owns library, name dialog, and path-tree preview", () =
   assert.doesNotMatch(source, /webextension-polyfill|browser\.storage|browser\.runtime/);
   assert.match(client, /export interface SavedTrailsClient/);
   assert.match(client, /browserSavedTrailsClient/);
+  assert.match(client, /load:\s*loadNamedTrails/);
   assert.match(client, /subscribe:\s*subscribeToSavedTrails/);
+  assert.doesNotMatch(client, /load:\s*loadSavedTrails/);
   assert.doesNotMatch(client, /duplicateNamedTrail|\bduplicate\s*\(/);
   assert.match(source, /librarySession !== session \|\|/);
   assert.match(source, /session\.loadRequest !== request/);
@@ -484,6 +490,7 @@ test("runtime message contract declares all message literals", () => {
     "TRAIL_OPEN_IN_NEW_TAB",
     "TRAIL_OPEN_IN_NEW_WINDOW",
     "TRAIL_SCROLL_REPORT",
+    "SAVED_TRAIL_LOAD",
     "SAVED_TRAIL_SAVE",
     "SAVED_TRAIL_RENAME",
     "SAVED_TRAIL_REPLACE",
@@ -506,6 +513,18 @@ test("saved trail open sends a path so new tabs can inherit lineage", () => {
   assert.match(contract, /type: "SAVED_TRAIL_OPEN"; path: TrailEntry\[\]/);
   assert.match(api, /type: "SAVED_TRAIL_OPEN",\s*path,/);
   assert.doesNotMatch(api, /type: "SAVED_TRAIL_OPEN",\s*url,/);
+});
+
+test("saved trail load goes through background so migration can finish first", () => {
+  const contract = readSource("src/lib/common/contracts/runtimeMessages.ts");
+  const api = readSource("src/lib/adapters/runtime/tabtrailApi.ts");
+  const client = readSource("src/lib/adapters/runtime/savedTrailsClient.ts");
+  assert.match(contract, /type: "SAVED_TRAIL_LOAD"/);
+  assert.match(api, /type: "SAVED_TRAIL_LOAD"/);
+  assert.match(api, /export async function loadNamedTrails/);
+  assert.match(client, /load:\s*loadNamedTrails/);
+  assert.doesNotMatch(client, /import \{[^}]*loadSavedTrails[^}]*\} from "\.\.\/storage\/savedTrailsStore"/);
+  assert.doesNotMatch(client, /load:\s*loadSavedTrails/);
 });
 
 test("saved trail management messages have typed wrappers and authoritative results", () => {

@@ -5,6 +5,7 @@
 import browser from "webextension-polyfill";
 import {
   deleteSavedTrail,
+  loadSavedTrails,
   renameSavedTrail,
   replaceSavedTrail,
   restoreSavedTrail,
@@ -76,6 +77,11 @@ function isDurableSavedTrailMutation(type: string): boolean {
   }
 }
 
+/** Durable library access that must wait for the startup migration gate. */
+function isDurableSavedTrailStorageAccess(type: string): boolean {
+  return type === "SAVED_TRAIL_LOAD" || isDurableSavedTrailMutation(type);
+}
+
 async function openOptionsPage(): Promise<TabTrailActionResult> {
   try {
     await browser.runtime.openOptionsPage();
@@ -92,13 +98,17 @@ export function createTrailMessageHandler(
   return async (message, sender) => {
     const durableSavedTrailMutation =
       typeof message.type === "string" && isDurableSavedTrailMutation(message.type);
+    const durableSavedTrailStorageAccess =
+      typeof message.type === "string" && isDurableSavedTrailStorageAccess(message.type);
     // storage.local is shared with the regular profile. Refuse before waiting
     // on migrations or calling the store so private URLs/titles/favicons can
     // never become durable, and private tabs cannot mutate the regular library.
+    // Reads (SAVED_TRAIL_LOAD) remain allowed so private windows can open the
+    // regular-profile library without writing it.
     if (durableSavedTrailMutation && sender.tab?.incognito === true) {
       return { ok: false, reason: PRIVATE_SAVED_TRAILS_REASON };
     }
-    if (durableSavedTrailMutation) {
+    if (durableSavedTrailStorageAccess) {
       await storageReady;
     }
     switch (message.type) {
@@ -141,6 +151,9 @@ export function createTrailMessageHandler(
         });
         return { ok: true };
       }
+
+      case "SAVED_TRAIL_LOAD":
+        return { ok: true as const, trails: await loadSavedTrails() };
 
       case "SAVED_TRAIL_OPEN":
         return await domain.openSavedTrail(message.path, message.mode, sender.tab);

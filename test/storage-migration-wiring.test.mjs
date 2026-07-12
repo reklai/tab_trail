@@ -93,7 +93,12 @@ test("background gates saved-trail storage messages on migration readiness", () 
   assert.match(handler, /storageReady: Promise<void> = Promise\.resolve\(\)/);
   assert.match(
     handler,
-    /isDurableSavedTrailMutation\(message\.type\)[\s\S]*if \(durableSavedTrailMutation\)[\s\S]*await storageReady;[\s\S]*switch \(message\.type\)/,
+    /isDurableSavedTrailStorageAccess\(message\.type\)[\s\S]*if \(durableSavedTrailStorageAccess\)[\s\S]*await storageReady;[\s\S]*switch \(message\.type\)/,
+  );
+  assert.match(handler, /case "SAVED_TRAIL_LOAD"/);
+  assert.match(
+    handler,
+    /function isDurableSavedTrailStorageAccess[\s\S]*type === "SAVED_TRAIL_LOAD"/,
   );
 });
 

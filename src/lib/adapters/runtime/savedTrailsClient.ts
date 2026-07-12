@@ -5,7 +5,6 @@
 import browser from "webextension-polyfill";
 import { TABTRAIL_STORAGE_KEYS } from "../../common/contracts/tabtrail";
 import { normalizeSavedTrails } from "../../core/trail/trailCore";
-import { loadSavedTrails } from "../storage/savedTrailsStore";
 import type {
   DeleteSavedTrailResult,
   ReplaceSavedTrailResult,
@@ -14,6 +13,7 @@ import type {
 } from "../storage/savedTrailsStore";
 import {
   deleteNamedTrail,
+  loadNamedTrails,
   openSavedTrail,
   renameNamedTrail,
   replaceNamedTrail,
@@ -54,9 +54,14 @@ function subscribeToSavedTrails(
   return () => browser.storage.onChanged.removeListener(storageChanged);
 }
 
-/** Browser-backed default used by the current content-script application. */
+/**
+ * Browser-backed default used by the host content-script / overlay RPC path.
+ * Durable reads go through the background so they wait on the startup
+ * migration gate (same authority as mutations). Subscribe still listens to
+ * storage.onChanged for push updates after the library is durable.
+ */
 export const browserSavedTrailsClient: SavedTrailsClient = {
-  load: loadSavedTrails,
+  load: loadNamedTrails,
   subscribe: subscribeToSavedTrails,
   open: openSavedTrail,
   save: saveNamedTrail,

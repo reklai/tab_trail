@@ -46,6 +46,7 @@ async function loadHandler() {
           loader: "js",
           contents: `
             const call = (operation, args) => globalThis.__savedTrailStoreCall(operation, args);
+            export const loadSavedTrails = (...args) => call("load", args);
             export const saveCapturedTrail = (...args) => call("save", args);
             export const renameSavedTrail = (...args) => call("rename", args);
             export const replaceSavedTrail = (...args) => call("replace", args);
@@ -171,6 +172,40 @@ test("opening an already supplied saved path remains non-durable in private tabs
     { ok: true },
   );
   assert.deepEqual(calls, [[path, "current", { id: 9, incognito: true }]]);
+});
+
+test("saved trail load is allowed in private tabs after storage is ready", async (t) => {
+  const { mod, cleanup } = await loadHandler();
+  t.after(cleanup);
+  const storeCalls = [];
+  globalThis.__savedTrailStoreCall = async (operation) => {
+    storeCalls.push(operation);
+    return [{ id: "t1", name: "One", pinned: false, createdAt: 1, updatedAt: 1, entries: [] }];
+  };
+  t.after(() => delete globalThis.__savedTrailStoreCall);
+
+  let releaseReady;
+  const storageReady = new Promise((resolve) => {
+    releaseReady = resolve;
+  });
+  const handler = mod.createTrailMessageHandler({}, storageReady);
+  const loadPromise = handler(
+    { type: "SAVED_TRAIL_LOAD" },
+    { tab: { id: 10, incognito: true } },
+  );
+
+  const blocked = await Promise.race([
+    loadPromise.then(() => "resolved-early"),
+    new Promise((resolve) => setTimeout(() => resolve("still-waiting"), 40)),
+  ]);
+  assert.equal(blocked, "still-waiting");
+  assert.deepEqual(storeCalls, []);
+
+  releaseReady();
+  const result = await loadPromise;
+  assert.equal(result.ok, true);
+  assert.equal(result.trails.length, 1);
+  assert.deepEqual(storeCalls, ["load"]);
 });
 
 test("only an extension overlay subframe can claim a host nonce", async (t) => {

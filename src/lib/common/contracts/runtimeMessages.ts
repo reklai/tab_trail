@@ -34,6 +34,7 @@ export type BackgroundRuntimeMessage =
       flush?: boolean;
     }
   | { type: "TRAIL_OVERLAY_STATE"; open: boolean }
+  | { type: "SAVED_TRAIL_LOAD" }
   | { type: "SAVED_TRAIL_SAVE"; path: TrailEntry[]; name: string }
   | { type: "SAVED_TRAIL_RENAME"; id: string; name: string }
   | {
