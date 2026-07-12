@@ -60,20 +60,113 @@ test("clip paths keep disjoint surfaces in separate closed subpaths", async () =
   assert.equal(geometry.buildOverlaySurfaceClipPath([]), geometry.OVERLAY_EMPTY_CLIP_PATH);
 });
 
-test("nextSurfacePublish unions previous and current then contracts when needed", async () => {
+test("nextSurfacePublish publishes current only for pure moves and stable open/close", async () => {
   const geometry = await loadGeometry();
   const previous = [{ x: 0, y: 0, width: 10, height: 10 }];
-  const current = [{ x: 20, y: 20, width: 10, height: 10 }];
-  const transition = geometry.nextSurfacePublish(previous, current);
+  const moved = [{ x: 20, y: 20, width: 10, height: 10 }];
+  const move = geometry.nextSurfacePublish(previous, moved);
+  assert.deepEqual(move.publish, moved);
+  assert.equal(move.needsContraction, false);
+  assert.equal(geometry.isStableSurfaceSetTransition(previous, moved), true);
+
+  const same = geometry.nextSurfacePublish(moved, moved);
+  assert.deepEqual(same.publish, moved);
+  assert.equal(same.needsContraction, false);
+
+  const withMenu = [
+    { x: 20, y: 20, width: 10, height: 10 },
+    { x: 40, y: 30, width: 80, height: 120 },
+  ];
+  const opened = geometry.nextSurfacePublish(moved, withMenu);
+  assert.deepEqual(opened.publish, withMenu);
+  assert.equal(opened.needsContraction, false);
+
+  const closed = geometry.nextSurfacePublish(withMenu, moved);
+  assert.deepEqual(closed.publish, moved);
+  assert.equal(closed.needsContraction, false);
+
+  const firstPaint = geometry.nextSurfacePublish([], moved);
+  assert.deepEqual(firstPaint.publish, moved);
+  assert.equal(firstPaint.needsContraction, false);
+});
+
+test("nextSurfacePublish treats same-count surface replacements as close/open", async () => {
+  const geometry = await loadGeometry();
+  const barBefore = { x: 20, y: 20, width: 100, height: 24 };
+  const barAfter = { x: 24, y: 20, width: 100, height: 24 };
+  const menu = { x: 40, y: 50, width: 160, height: 220 };
+  const dialog = { x: 60, y: 80, width: 320, height: 180 };
+  const previous = [barBefore, menu];
+  const current = [barAfter, dialog];
+
+  assert.equal(geometry.surfacesSizeMatched(previous, current), false);
+  assert.equal(geometry.isStableSurfaceSetTransition(previous, current), true);
+  assert.deepEqual(geometry.nextSurfacePublish(previous, current), {
+    publish: current,
+    needsContraction: false,
+  });
+  assert.deepEqual(geometry.nextSurfacePublish(current, previous), {
+    publish: previous,
+    needsContraction: false,
+  });
+});
+
+test("surfacesSizeMatched finds a complete pairing independent of iteration order", async () => {
+  const geometry = await loadGeometry();
+  const source = [
+    { x: 0, y: 0, width: 10, height: 10 },
+    { x: 20, y: 0, width: 12, height: 10 },
+  ];
+  const target = [
+    { x: 40, y: 0, width: 11, height: 10 },
+    { x: 60, y: 0, width: 8, height: 10 },
+  ];
+
+  assert.equal(geometry.surfacesSizeMatched(source, target), true);
+  assert.equal(geometry.surfacesSizeMatched([...source].reverse(), target), true);
+  assert.equal(geometry.surfacesSizeMatched(source, [...target].reverse()), true);
+  assert.deepEqual(geometry.nextSurfacePublish(source, target), {
+    publish: target,
+    needsContraction: false,
+  });
+
+  const expanded = [
+    ...target,
+    { x: 80, y: 0, width: 30, height: 10 },
+  ];
+  assert.deepEqual(geometry.nextSurfacePublish(source, expanded), {
+    publish: expanded,
+    needsContraction: false,
+  });
+  assert.deepEqual(geometry.nextSurfacePublish(expanded, source), {
+    publish: source,
+    needsContraction: false,
+  });
+
+  const competing = [
+    { x: 40, y: 0, width: 11, height: 10 },
+    { x: 60, y: 0, width: 30, height: 10 },
+  ];
+  assert.equal(geometry.surfacesSizeMatched(source, competing), false);
+});
+
+test("nextSurfacePublish unions previous and current when sizes change substantially", async () => {
+  const geometry = await loadGeometry();
+  const previous = [{ x: 0, y: 0, width: 10, height: 10 }];
+  const resized = [{ x: 0, y: 0, width: 10, height: 40 }];
+  const transition = geometry.nextSurfacePublish(previous, resized);
   assert.deepEqual(transition.publish, [
     { x: 0, y: 0, width: 10, height: 10 },
-    { x: 20, y: 20, width: 10, height: 10 },
+    { x: 0, y: 0, width: 10, height: 40 },
   ]);
   assert.equal(transition.needsContraction, true);
+  assert.equal(geometry.isStableSurfaceSetTransition(previous, resized), false);
 
-  const same = geometry.nextSurfacePublish(current, current);
-  assert.deepEqual(same.publish, current);
-  assert.equal(same.needsContraction, false);
+  // Within size tolerance still counts as a stable move, not a resize union.
+  const near = [{ x: 5, y: 5, width: 10, height: 11.5 }];
+  const tolerant = geometry.nextSurfacePublish(previous, near);
+  assert.deepEqual(tolerant.publish, near);
+  assert.equal(tolerant.needsContraction, false);
 
   const deduped = geometry.uniqueSurfaceRects([
     { x: 1, y: 1, width: 2, height: 2 },
@@ -81,7 +174,7 @@ test("nextSurfacePublish unions previous and current then contracts when needed"
   ]);
   assert.deepEqual(deduped, [{ x: 1, y: 1, width: 2, height: 2 }]);
   assert.equal(
-    geometry.surfaceRectsEqual(current, [{ x: 20, y: 20, width: 10, height: 10 }]),
+    geometry.surfaceRectsEqual(resized, [{ x: 0, y: 0, width: 10, height: 40 }]),
     true,
   );
 });

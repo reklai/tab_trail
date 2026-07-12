@@ -207,6 +207,70 @@ test("host and frame message guards reject mismatched versions and malformed pay
     protocol.isOverlayHostToFrameMessage({ type: "HOST_SHOW", version, state, settings }),
     true,
   );
+  // Scroll restore attaches viewport on entries; HOST_SHOW must accept it or
+  // the frame hard-fails open after the user has scrolled on trail pages.
+  const stateWithViewport = {
+    entries: [{
+      ...entry,
+      viewport: { x: 0, y: 240, root: "document", capturedAt: 1234 },
+    }],
+    cursor: 0,
+  };
+  assert.equal(
+    protocol.isOverlayHostToFrameMessage({
+      type: "HOST_SHOW",
+      version,
+      state: stateWithViewport,
+      settings,
+    }),
+    true,
+    "HOST_SHOW must accept trail entries that carry last-known viewport",
+  );
+  assert.equal(
+    protocol.isOverlayHostToFrameMessage({
+      type: "HOST_TRAIL_UPDATED",
+      version,
+      state: stateWithViewport,
+    }),
+    true,
+  );
+  assert.equal(
+    protocol.isOverlayRpcRequest({
+      requestId: 9,
+      method: "SAVED_OPEN",
+      params: {
+        path: [{
+          ...entry,
+          viewport: {
+            x: 12,
+            y: 34,
+            root: "element",
+            rootSelector: "#main",
+            scrollHeight: 2000,
+          },
+        }],
+        mode: "current",
+      },
+    }),
+    true,
+    "saved path RPC must accept viewport-bearing entries",
+  );
+  assert.equal(
+    protocol.isOverlayHostToFrameMessage({
+      type: "HOST_SHOW",
+      version,
+      state: {
+        entries: [{
+          ...entry,
+          viewport: { x: 0, y: 1, root: "element" },
+        }],
+        cursor: 0,
+      },
+      settings,
+    }),
+    false,
+    "element root without selector is invalid",
+  );
   assert.equal(
     protocol.isOverlayHostToFrameMessage({
       type: "HOST_SAVED_TRAILS_UPDATED",

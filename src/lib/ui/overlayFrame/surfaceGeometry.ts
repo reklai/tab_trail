@@ -222,17 +222,122 @@ export function surfaceRectsEqual(
   return true;
 }
 
+/** Size match tolerance for treating a rect as the same surface after a move. */
+export const SURFACE_SIZE_MATCH_TOLERANCE_PX = 2;
+
+function sizesMatch(
+  first: OverlaySurfaceRect,
+  second: OverlaySurfaceRect,
+  tolerancePx: number,
+): boolean {
+  return (
+    Math.abs(first.width - second.width) <= tolerancePx &&
+    Math.abs(first.height - second.height) <= tolerancePx
+  );
+}
+
+/** Return the maximum number of unique size-compatible source/target pairs. */
+function maximumSizeMatchCount(
+  source: readonly OverlaySurfaceRect[],
+  target: readonly OverlaySurfaceRect[],
+  tolerancePx: number,
+): number {
+  const targetToSource = new Array<number>(target.length).fill(-1);
+
+  function assignSource(
+    sourceIndex: number,
+    visitedTargets: boolean[],
+  ): boolean {
+    for (let targetIndex = 0; targetIndex < target.length; targetIndex += 1) {
+      if (visitedTargets[targetIndex]) continue;
+      if (!sizesMatch(source[sourceIndex], target[targetIndex], tolerancePx)) continue;
+      visitedTargets[targetIndex] = true;
+
+      const assignedSource = targetToSource[targetIndex];
+      if (
+        assignedSource === -1 ||
+        assignSource(assignedSource, visitedTargets)
+      ) {
+        targetToSource[targetIndex] = sourceIndex;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  let matchCount = 0;
+  for (let sourceIndex = 0; sourceIndex < source.length; sourceIndex += 1) {
+    const visitedTargets = new Array<boolean>(target.length).fill(false);
+    if (assignSource(sourceIndex, visitedTargets)) matchCount += 1;
+  }
+  return matchCount;
+}
+
 /**
- * When layout changes, publish the union of previous + current for one frame so
- * hit testing does not drop mid-transition, then contract to current if needed.
+ * True when every rect in `source` can be paired with a unique rect in `target`
+ * of nearly the same width/height (position may differ). Used to detect pure
+ * translations, expansions, and contractions without large resizes.
+ */
+export function surfacesSizeMatched(
+  source: readonly OverlaySurfaceRect[],
+  target: readonly OverlaySurfaceRect[],
+  tolerancePx: number = SURFACE_SIZE_MATCH_TOLERANCE_PX,
+): boolean {
+  if (source.length > target.length) return false;
+  return maximumSizeMatchCount(source, target, tolerancePx) === source.length;
+}
+
+/**
+ * True when layout change is only translation and/or add/remove of whole
+ * surfaces — not a large resize. In that case publishing previous∪current
+ * leaves empty iframe canvas at the old rect (white ghost on Firefox/Zen).
+ */
+export function isStableSurfaceSetTransition(
+  previous: readonly OverlaySurfaceRect[],
+  current: readonly OverlaySurfaceRect[],
+  tolerancePx: number = SURFACE_SIZE_MATCH_TOLERANCE_PX,
+): boolean {
+  if (previous.length === 0 || current.length === 0) {
+    // First paint or full clear: current alone is correct (empty handled by host).
+    return true;
+  }
+  if (previous.length === current.length) {
+    const matchCount = maximumSizeMatchCount(previous, current, tolerancePx);
+    if (matchCount === previous.length) return true;
+    // A retained surface plus unmatched rects indicates a synchronous close/open
+    // replacement (for example, a menu being replaced by a larger dialog).
+    // With no retained size match, preserve union+contraction for a large resize.
+    return matchCount > 0;
+  }
+  if (previous.length < current.length) {
+    // Expansion: prior surfaces still present at similar sizes.
+    return surfacesSizeMatched(previous, current, tolerancePx);
+  }
+  // Contraction: remaining surfaces match a subset of the prior set.
+  return surfacesSizeMatched(current, previous, tolerancePx);
+}
+
+/**
+ * Choose rects to publish for a layout change.
+ *
+ * - Stable transitions (pure move, open/close without large resize): publish
+ *   **current only** so drag trails and closed-panel ghosts do not flash empty
+ *   iframe canvas (Firefox/Zen may paint that white).
+ * - Unstable transitions (large resize / unmatched sizes): publish
+ *   **union(previous, current)** for one frame so hit testing does not drop,
+ *   then contract to current if needed.
  */
 export function nextSurfacePublish(
   previous: readonly OverlaySurfaceRect[],
   current: readonly OverlaySurfaceRect[],
 ): { publish: OverlaySurfaceRect[]; needsContraction: boolean } {
+  const uniqueCurrent = uniqueSurfaceRects(current);
+  if (isStableSurfaceSetTransition(previous, current)) {
+    return { publish: uniqueCurrent, needsContraction: false };
+  }
   const publish = uniqueSurfaceRects([...previous, ...current]);
   return {
     publish,
-    needsContraction: !surfaceRectsEqual(publish, current),
+    needsContraction: !surfaceRectsEqual(publish, uniqueCurrent),
   };
 }

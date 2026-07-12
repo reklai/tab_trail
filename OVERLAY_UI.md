@@ -113,6 +113,11 @@ into one rect). Host builds a **multi-subpath** rounded `clip-path` so **gaps
 between surfaces stay click-through**. Empty clip: hide iframe
 (`pointer-events: none`).
 
+**Publish policy:** pure moves and stable open/close publish **current rects
+only** (avoids a trailing empty clip / white ghost on Firefox/Zen). Union of
+previous∪current is reserved for large size mismatches, then contracts next
+frame.
+
 Also:
 
 - `.wf-layer`: `pointer-events: none`; panes opt into `auto`

@@ -83,7 +83,7 @@ Recent review work already fixed high-value correctness edges (typed hibernate/d
 | Soft vs hard failure ambiguity | One bad message kills session vs silent drop | Host soft-drops malformed frame msgs; frame hard-fails invalid host msgs; heartbeat / auth hard-teardown |
 | Warm resume edge cases | Hibernate mid-load then reopen; ready without port; startup timeout | `open()` re-arm cold when `!ready`; `resumeWarm` only when `ready`; 3 s startup timeout |
 | Mid-handshake second toggle | Second chord hibernates (not host-open idempotent) | `topFrameOverlay` `TRAIL_SHOW` when `isOpen()` |
-| Geometry thrash / transitional union | Brief oversized hit region during layout change | Frame union of previous+current rects + contraction next frame |
+| Geometry thrash / transitional union | Brief oversized hit region / white ghost on move | Stable moves publish current only; union+contract only on large resize |
 | Trail patch vs rebuild | Full bar rebuild on cursor change; metadata patches otherwise | `canPatchLiveTrail` / `patchLiveTrail` (title-only path already tested) |
 | Inject miss on toggle | First chord fails on pre-existing tab | `toggleOverlay` re-injects then retries `TRAIL_SHOW` (ladder tests exist) |
 | Visibility destroy | Tab hide destroys warm host | `visibilitychange` + `pagehide` → destroy (not hibernate) |
@@ -347,7 +347,7 @@ Existing design:
 Pipeline:
 
 1. Frame: ResizeObserver + narrow MutationObserver (`style|class|hidden`, childList) → rAF coalesce → measure max 32 surfaces (notices merged).
-2. Layout change → send **union(previous, current)** then schedule contraction frame with exact rects.
+2. Layout change → if stable (pure translation / open-close without large resize), send **current only**; else send **union(previous, current)** then schedule contraction frame with exact rects.
 3. Host: viewport tolerance 1 px; validate; apply clip; empty → hide surface.
 4. Host resize → hide + `HOST_REQUEST_SURFACES` (immediate measure; hidden iframe may not get rAF promptly — already handled in frame).
 

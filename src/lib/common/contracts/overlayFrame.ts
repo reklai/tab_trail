@@ -261,18 +261,56 @@ const TRAIL_TRANSITIONS = new Set([
   "other",
 ]);
 
+/** Optional scroll snapshot on a trail entry (HOST_SHOW / trail updates / saved paths). */
+function isTrailViewport(value: unknown): value is TrailViewport {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["x", "y"], ["scrollHeight", "root", "rootSelector", "capturedAt"])
+  ) {
+    return false;
+  }
+  if (!isFiniteNumber(value.x) || !isFiniteNumber(value.y)) return false;
+  if (
+    value.scrollHeight !== undefined &&
+    (!isFiniteNumber(value.scrollHeight) || value.scrollHeight < 0)
+  ) {
+    return false;
+  }
+  if (value.root !== undefined && value.root !== "document" && value.root !== "element") {
+    return false;
+  }
+  if (value.rootSelector !== undefined && typeof value.rootSelector !== "string") {
+    return false;
+  }
+  // Nested coords are only meaningful with a selector (matches viewportCore).
+  if (value.root === "element" && typeof value.rootSelector !== "string") {
+    return false;
+  }
+  if (
+    value.capturedAt !== undefined &&
+    (!isFiniteNumber(value.capturedAt) || value.capturedAt < 0)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function isTrailEntry(value: unknown): value is TrailEntry {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, [
-      "url",
-      "title",
-      "favIconUrl",
-      "timestamp",
-      "transition",
-      "redirected",
-      "historyBacked",
-    ])
+    !hasOnlyKeys(
+      value,
+      [
+        "url",
+        "title",
+        "favIconUrl",
+        "timestamp",
+        "transition",
+        "redirected",
+        "historyBacked",
+      ],
+      ["viewport"],
+    )
   ) return false;
   return typeof value.url === "string" && value.url.length > 0 &&
     typeof value.title === "string" &&
@@ -280,7 +318,8 @@ function isTrailEntry(value: unknown): value is TrailEntry {
     isFiniteNumber(value.timestamp) &&
     typeof value.transition === "string" && TRAIL_TRANSITIONS.has(value.transition) &&
     typeof value.redirected === "boolean" &&
-    typeof value.historyBacked === "boolean";
+    typeof value.historyBacked === "boolean" &&
+    (value.viewport === undefined || isTrailViewport(value.viewport));
 }
 
 function isTrailEntries(value: unknown): value is TrailEntry[] {
